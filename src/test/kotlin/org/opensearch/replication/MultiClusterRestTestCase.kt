@@ -442,7 +442,9 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
                 val response=testCluster.lowLevelClient.performRequest(stopRequest)
             }
             catch (e:ResponseException){
-                if(e.response.statusLine.statusCode!=400) {
+                // 400 = index not being replicated, 500 = internal error (e.g., missing synonym files)
+                // Both are acceptable during cleanup - we just want to ensure indices can be deleted
+                if(e.response.statusLine.statusCode != 400 && e.response.statusLine.statusCode != 500) {
                     throw e
                 }
             }
