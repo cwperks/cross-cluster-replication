@@ -84,6 +84,7 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
                       val preserveClusterSettings: Boolean,
                       val securityEnabled: Boolean) {
         val restClient : RestHighLevelClient
+        private val connectionManager: org.apache.hc.client5.http.impl.nio.PoolingAsyncClientConnectionManager
         init {
             val trustCerts = arrayOf<TrustManager>(object: X509TrustManager {
                 override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {
@@ -102,10 +103,10 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
             val tlsStrategy = ClientTlsStrategyBuilder.create().setSslContext(sslContext)
                 .setHostnameVerifier { _, _ -> true } // Disable hostname verification for local cluster
                 .build()
-            val connManager = PoolingAsyncClientConnectionManagerBuilder.create().setTlsStrategy(tlsStrategy).build()
+            connectionManager = PoolingAsyncClientConnectionManagerBuilder.create().setTlsStrategy(tlsStrategy).build()
 
             val builder = RestClient.builder(*httpHosts.toTypedArray()).setHttpClientConfigCallback { httpAsyncClientBuilder ->
-                httpAsyncClientBuilder.setConnectionManager(connManager)
+                httpAsyncClientBuilder.setConnectionManager(connectionManager)
                 httpAsyncClientBuilder.setVersionPolicy(HttpVersionPolicy.FORCE_HTTP_1)
             }
             configureClient(builder, getClusterSettings(clusterName), securityEnabled)
@@ -113,6 +114,11 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
             restClient = RestHighLevelClient(builder)
         }
         val lowLevelClient = restClient.lowLevelClient!!
+
+        fun close() {
+            restClient.close()
+            connectionManager.close()
+        }
 
         var defaultSecuritySetupCompleted = false
         companion object {
@@ -179,7 +185,7 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
         @AfterClass @JvmStatic
         fun cleanUpRestClients() {
             testClusters.values.forEach {
-                it.restClient.close()
+                it.close()
             }
         }
 
