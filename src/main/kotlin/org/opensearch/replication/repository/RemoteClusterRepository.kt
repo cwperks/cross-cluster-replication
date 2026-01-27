@@ -143,10 +143,11 @@ class RemoteClusterRepository(private val repositoryMetadata: RepositoryMetadata
         throw UnsupportedOperationException("Operation not permitted")
     }
 
-    override fun snapshotShard(store: Store?, mapperService: MapperService?, snapshotId: SnapshotId?, indexId: IndexId?,
-                               snapshotIndexCommit: IndexCommit?, @Nullable shardStateIdentifier: String?,
-                               snapshotStatus: IndexShardSnapshotStatus?, repositoryMetaVersion: Version?,
-                               userMetadata: MutableMap<String, Any>?, listener: ActionListener<String>?) {
+    override fun snapshotShard(store: Store, mapperService: MapperService, snapshotId: SnapshotId, indexId: IndexId,
+                               snapshotIndexCommit: IndexCommit, @Nullable shardStateIdentifier: String?,
+                               snapshotStatus: IndexShardSnapshotStatus, repositoryMetaVersion: Version,
+                               userMetadata: MutableMap<String, Any>, listener: ActionListener<String>,
+                               indexMetadata: IndexMetadata?) {
         throw UnsupportedOperationException("Operation not permitted")
     }
 

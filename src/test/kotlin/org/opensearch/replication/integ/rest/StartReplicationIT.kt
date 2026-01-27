@@ -92,8 +92,8 @@ import org.opensearch.replication.util.ValidationUtil
 class StartReplicationIT: MultiClusterRestTestCase() {
     private val leaderIndexName = "leader_index"
     private val followerIndexName = "follower_index"
-    private val leaderClusterPath = "testclusters/leaderCluster-0"
-    private val followerClusterPath = "testclusters/followCluster-0"
+    private val leaderClusterPath = "testclusters/leaderCluster-"
+    private val followerClusterPath = "testclusters/followCluster-"
     private val repoPath = "testclusters/repo"
     private val buildDir = System.getProperty("build.dir")
     private val synonymsJson = "/analyzers/synonym_setting.json"
@@ -592,12 +592,14 @@ class StartReplicationIT: MultiClusterRestTestCase() {
 
         Assume.assumeFalse(ANALYZERS_NOT_ACCESSIBLE_FOR_REMOTE_CLUSTERS, checkifIntegTestRemote())
 
-        val synonyms = javaClass.getResourceAsStream("/analyzers/synonyms.txt")
-        val config = PathUtils.get(buildDir, leaderClusterPath, "config")
-        val synonymPath = config.resolve("synonyms.txt")
+        val leaderSynonymPaths = mutableListOf<java.nio.file.Path>()
+        for (i in 0 until clusterNodes(LEADER)) {
+            val config = PathUtils.get(buildDir, leaderClusterPath + i, "config")
+            val synonymPath = config.resolve("synonyms.txt")
+            leaderSynonymPaths.add(synonymPath)
+            Files.copy(javaClass.getResourceAsStream("/analyzers/synonyms.txt"), synonymPath)
+        }
         try {
-            Files.copy(synonyms, synonymPath)
-
             val settings: Settings = Settings.builder().loadFromStream(synonymsJson, javaClass.getResourceAsStream(synonymsJson), false)
                 .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
                 .build()
@@ -615,9 +617,7 @@ class StartReplicationIT: MultiClusterRestTestCase() {
                 followerClient.startReplication(StartReplicationRequest("source", leaderIndexName, followerIndexName))
             }.isInstanceOf(ResponseException::class.java).hasMessageContaining("resource_not_found_exception")
         } finally {
-            if (Files.exists(synonymPath)) {
-                Files.delete(synonymPath)
-            }
+            leaderSynonymPaths.forEach { if (Files.exists(it)) Files.delete(it) }
         }
     }
 
@@ -625,14 +625,21 @@ class StartReplicationIT: MultiClusterRestTestCase() {
 
         Assume.assumeFalse(ANALYZERS_NOT_ACCESSIBLE_FOR_REMOTE_CLUSTERS, checkifIntegTestRemote())
 
-        val synonyms = javaClass.getResourceAsStream("/analyzers/synonyms.txt")
-        val leaderConfig = PathUtils.get(buildDir, leaderClusterPath, "config")
-        val leaderSynonymPath = leaderConfig.resolve("synonyms.txt")
-        val followerConfig = PathUtils.get(buildDir, followerClusterPath, "config")
-        val followerSynonymPath = followerConfig.resolve("synonyms.txt")
+        val leaderSynonymPaths = mutableListOf<java.nio.file.Path>()
+        val followerSynonymPaths = mutableListOf<java.nio.file.Path>()
+        for (i in 0 until clusterNodes(LEADER)) {
+            val leaderConfig = PathUtils.get(buildDir, leaderClusterPath + i, "config")
+            val leaderSynonymPath = leaderConfig.resolve("synonyms.txt")
+            leaderSynonymPaths.add(leaderSynonymPath)
+            Files.copy(javaClass.getResourceAsStream("/analyzers/synonyms.txt"), leaderSynonymPath)
+        }
+        for (i in 0 until clusterNodes(FOLLOWER)) {
+            val followerConfig = PathUtils.get(buildDir, followerClusterPath + i, "config")
+            val followerSynonymPath = followerConfig.resolve("synonyms.txt")
+            followerSynonymPaths.add(followerSynonymPath)
+            Files.copy(javaClass.getResourceAsStream("/analyzers/synonyms.txt"), followerSynonymPath)
+        }
         try {
-            Files.copy(synonyms, leaderSynonymPath)
-            Files.copy(synonyms, followerSynonymPath)
             val settings: Settings = Settings.builder().loadFromStream(synonymsJson, javaClass.getResourceAsStream(synonymsJson), false)
                 .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
                 .build()
@@ -651,13 +658,10 @@ class StartReplicationIT: MultiClusterRestTestCase() {
             assertBusy {
                 assertThat(followerClient.indices().exists(GetIndexRequest(followerIndexName), RequestOptions.DEFAULT)).isEqualTo(true)
             }
+            followerClient.stopReplication(followerIndexName)
         } finally {
-            if (Files.exists(leaderSynonymPath)) {
-                Files.delete(leaderSynonymPath)
-            }
-            if (Files.exists(followerSynonymPath)) {
-                Files.delete(followerSynonymPath)
-            }
+            leaderSynonymPaths.forEach { if (Files.exists(it)) Files.delete(it) }
+            followerSynonymPaths.forEach { if (Files.exists(it)) Files.delete(it) }
         }
     }
 
@@ -665,15 +669,22 @@ class StartReplicationIT: MultiClusterRestTestCase() {
 
         Assume.assumeFalse(ANALYZERS_NOT_ACCESSIBLE_FOR_REMOTE_CLUSTERS, checkifIntegTestRemote())
 
-        val synonyms = javaClass.getResourceAsStream("/analyzers/synonyms.txt")
-        val leaderConfig = PathUtils.get(buildDir, leaderClusterPath, "config")
-        val leaderSynonymPath = leaderConfig.resolve("synonyms.txt")
-        val followerConfig = PathUtils.get(buildDir, followerClusterPath, "config")
         val synonymFollowerFilename = "synonyms_follower.txt"
-        val followerSynonymPath = followerConfig.resolve(synonymFollowerFilename)
+        val leaderSynonymPaths = mutableListOf<java.nio.file.Path>()
+        val followerSynonymPaths = mutableListOf<java.nio.file.Path>()
+        for (i in 0 until clusterNodes(LEADER)) {
+            val leaderConfig = PathUtils.get(buildDir, leaderClusterPath + i, "config")
+            val leaderSynonymPath = leaderConfig.resolve("synonyms.txt")
+            leaderSynonymPaths.add(leaderSynonymPath)
+            Files.copy(javaClass.getResourceAsStream("/analyzers/synonyms.txt"), leaderSynonymPath)
+        }
+        for (i in 0 until clusterNodes(FOLLOWER)) {
+            val followerConfig = PathUtils.get(buildDir, followerClusterPath + i, "config")
+            val followerSynonymPath = followerConfig.resolve(synonymFollowerFilename)
+            followerSynonymPaths.add(followerSynonymPath)
+            Files.copy(javaClass.getResourceAsStream("/analyzers/synonyms.txt"), followerSynonymPath)
+        }
         try {
-            Files.copy(synonyms, leaderSynonymPath)
-            Files.copy(synonyms, followerSynonymPath)
             val settings: Settings = Settings.builder().loadFromStream(synonymsJson, javaClass.getResourceAsStream(synonymsJson), false)
                 .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 1)
                 .build()
@@ -695,13 +706,10 @@ class StartReplicationIT: MultiClusterRestTestCase() {
             assertBusy {
                 assertThat(followerClient.indices().exists(GetIndexRequest(followerIndexName), RequestOptions.DEFAULT)).isEqualTo(true)
             }
+            followerClient.stopReplication(followerIndexName)
         } finally {
-            if (Files.exists(leaderSynonymPath)) {
-                Files.delete(leaderSynonymPath)
-            }
-            if (Files.exists(followerSynonymPath)) {
-                Files.delete(followerSynonymPath)
-            }
+            leaderSynonymPaths.forEach { if (Files.exists(it)) Files.delete(it) }
+            followerSynonymPaths.forEach { if (Files.exists(it)) Files.delete(it) }
         }
     }
 
@@ -796,6 +804,53 @@ class StartReplicationIT: MultiClusterRestTestCase() {
             },
             30, TimeUnit.SECONDS
         )
+    }
+
+    fun `test that write alias is stripped on follower`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        val leaderClient = getClientForCluster(LEADER)
+        setMetadataSyncDelay() // Ensure sync happens reasonably fast
+        createConnectionBetweenClusters(FOLLOWER, LEADER)
+
+        val createIndexResponse = leaderClient.indices().create(
+            CreateIndexRequest(leaderIndexName)
+                .alias(Alias("write_alias").writeIndex(true)),
+            RequestOptions.DEFAULT
+        )
+        assertThat(createIndexResponse.isAcknowledged).isTrue()
+
+        followerClient.startReplication(
+            StartReplicationRequest("source", leaderIndexName, followerIndexName),
+            waitForRestore = true
+        )
+
+        assertBusy {
+            assertThat(followerClient.indices().exists(GetIndexRequest(followerIndexName), RequestOptions.DEFAULT)).isEqualTo(true)
+        }
+
+        var followerAliases = followerClient.indices().getAlias(GetAliasesRequest().indices(followerIndexName), RequestOptions.DEFAULT)
+        var aliasMetadata = followerAliases.aliases[followerIndexName]?.find { it.alias == "write_alias" }
+        assertThat(aliasMetadata).isNotNull
+        assertThat(aliasMetadata?.writeIndex()).isFalse()
+
+        // trigger a metadata sync to ensure the alias state is persisted
+        val indicesAliasesRequest = IndicesAliasesRequest()
+        indicesAliasesRequest.addAliasAction(
+            IndicesAliasesRequest.AliasActions.add().index(leaderIndexName).alias("new_alias")
+        )
+        leaderClient.indices().updateAliases(indicesAliasesRequest, RequestOptions.DEFAULT)
+
+        TimeUnit.SECONDS.sleep(SLEEP_TIME_BETWEEN_SYNC + 2) // Wait for sync
+
+        assertBusy {
+            val aliases = followerClient.indices().getAlias(GetAliasesRequest().indices(followerIndexName), RequestOptions.DEFAULT)
+            assertThat(aliases.aliases[followerIndexName]?.find { it.alias == "new_alias" }).isNotNull
+        }
+
+        followerAliases = followerClient.indices().getAlias(GetAliasesRequest().indices(followerIndexName), RequestOptions.DEFAULT)
+        aliasMetadata = followerAliases.aliases[followerIndexName]?.find { it.alias == "write_alias" }
+        assertThat(aliasMetadata).isNotNull
+        assertThat(aliasMetadata?.writeIndex()).isFalse()
     }
 
     fun `test that snapshot on leader does not affect replication during bootstrap`() {
@@ -1354,11 +1409,37 @@ class StartReplicationIT: MultiClusterRestTestCase() {
     private fun assertEqualAliases() {
         val followerClient = getClientForCluster(FOLLOWER)
         val leaderClient = getClientForCluster(LEADER)
-        var getAliasesRequest = GetAliasesRequest().indices(followerIndexName)
-        var aliasRespone = followerClient.indices().getAlias(getAliasesRequest, RequestOptions.DEFAULT)
-        var followerAliases = aliasRespone.aliases.get(followerIndexName)
-        aliasRespone = leaderClient.indices().getAlias(GetAliasesRequest().indices(leaderIndexName), RequestOptions.DEFAULT)
-        var leaderAliases = aliasRespone.aliases.get(leaderIndexName)
-        Assert.assertEquals(followerAliases, leaderAliases)
+        val getAliasesRequest = GetAliasesRequest().indices(followerIndexName)
+        var aliasResponse = followerClient.indices().getAlias(getAliasesRequest, RequestOptions.DEFAULT)
+        val followerAliases = aliasResponse.aliases.get(followerIndexName)
+        aliasResponse = leaderClient.indices().getAlias(GetAliasesRequest().indices(leaderIndexName), RequestOptions.DEFAULT)
+        val leaderAliases = aliasResponse.aliases.get(leaderIndexName)
+
+        if (followerAliases == null || leaderAliases == null) {
+            Assert.fail("Aliases are null. Leader: $leaderAliases, Follower: $followerAliases")
+        }
+        if (followerAliases!!.size != leaderAliases!!.size) {
+            Assert.fail("Alias count mismatch. Leader: ${leaderAliases.size}, Follower: ${followerAliases.size}")
+        }
+
+        for (leader in leaderAliases) {
+            val follower = followerAliases.find { it.alias() == leader.alias() }
+            Assert.assertNotNull("Follower missing alias ${leader.alias()}", follower)
+
+            Assert.assertEquals("Filter mismatch for ${leader.alias()}", leader.filter(), follower!!.filter())
+            Assert.assertEquals("IndexRouting mismatch for ${leader.alias()}", leader.indexRouting(), follower.indexRouting())
+            Assert.assertEquals("SearchRouting mismatch for ${leader.alias()}", leader.searchRouting(), follower.searchRouting())
+            Assert.assertEquals("IsHidden mismatch for ${leader.alias()}", leader.isHidden(), follower.isHidden())
+
+            val leaderWrite = leader.writeIndex()
+            val followerWrite = follower.writeIndex()
+
+            if (leaderWrite == true) {
+                Assert.assertFalse("Follower alias ${follower.alias()} should have writeIndex=false when leader is true", followerWrite == true)
+            } else {
+                Assert.assertEquals("WriteIndex mismatch for ${leader.alias()} (Leader: $leaderWrite)", leaderWrite, followerWrite)
+            }
+        }
     }
 }
+

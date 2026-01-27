@@ -98,6 +98,7 @@ import org.opensearch.replication.ReplicationPlugin.Companion.REPLICATION_INDEX_
 import org.opensearch.core.rest.RestStatus
 import org.opensearch.core.tasks.TaskId
 import org.opensearch.tasks.TaskManager
+import org.opensearch.action.admin.cluster.snapshots.restore.RestoreSnapshotRequest
 import org.opensearch.threadpool.ThreadPool
 import java.util.Collections
 import java.util.function.Predicate
@@ -344,6 +345,44 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
         return clusterService.state().routingTable.hasIndex(followerIndexName)
     }
 
+    /**
+     * Checks if the specified index is currently in a closed state.
+     */
+    internal fun isIndexClosed(indexName: String): Boolean {
+        return try {
+            val clusterState = clusterService.state()
+            val indexMetadata = clusterState.metadata.index(indexName)
+            
+            if (indexMetadata == null) {
+                log.warn("Index metadata not found for $indexName, defaulting to open operation for safety")
+                true // Default to performing open operation for safety
+            } else {
+                val isClosed = indexMetadata.state != IndexMetadata.State.OPEN
+                log.debug("Index $indexName state check: ${if (isClosed) "CLOSED" else "OPEN"}")
+                isClosed
+            }
+        } catch (e: Exception) {
+            log.warn("Failed to check state for index $indexName, defaulting to open operation for safety", e)
+            true // Default to performing open operation for safety
+        }
+    }
+
+    /**
+     * Conditionally opens an index if it is currently closed.
+     */
+    private suspend fun conditionallyOpenIndex(indexName: String, logSuffix: String = "") {
+        if (isIndexClosed(indexName)) {
+            log.info("Index $indexName is closed, opening it")
+            val updateRequest = UpdateMetadataRequest(indexName, UpdateMetadataRequest.Type.OPEN, Requests.openIndexRequest(indexName))
+            client.suspendExecute(UpdateMetadataAction.INSTANCE, updateRequest, injectSecurityContext = true)
+            if (logSuffix.isNotEmpty()) {
+                log.info("Opened the index $indexName $logSuffix")
+            }
+        } else {
+            log.info("Index $indexName is already open, skipping open operation")
+        }
+    }
+
     private suspend fun evalMonitoringState():IndexReplicationState {
         // Handling for node crashes during Static Index Updates'
         // Makes sure follower index is open, shard tasks are running
@@ -355,8 +394,7 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
             return MonitoringState
         }
 
-        val updateRequest = UpdateMetadataRequest(followerIndexName, UpdateMetadataRequest.Type.OPEN, Requests.openIndexRequest(followerIndexName))
-        client.suspendExecute(UpdateMetadataAction.INSTANCE, updateRequest, injectSecurityContext = true)
+        conditionallyOpenIndex(followerIndexName)
 
         registerCloseListeners()
         val clusterState = clusterService.state()
@@ -545,7 +583,7 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
                     request = null
                 } else {
                     log.info("All aliases are not equal on $followerIndexName. Will sync up them")
-                    request  = IndicesAliasesRequest()
+                    request = IndicesAliasesRequest()
                     var toAdd = leaderAliases - followerAliases
 
                     for (alias in toAdd) {
@@ -555,8 +593,14 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
                             .alias(alias.alias)
                             .indexRouting(alias.indexRouting)
                             .searchRouting(alias.searchRouting)
-                            .writeIndex(alias.writeIndex())
                             .isHidden(alias.isHidden)
+
+                        val writeIndex = alias.writeIndex()
+                        if (writeIndex == true) {
+                            aliasAction.writeIndex(false) // Strip write index if it's true on leader
+                        } else {
+                            aliasAction.writeIndex(writeIndex) // Preserve null or false
+                        }
 
                         if (alias.filteringRequired())  {
                             aliasAction = aliasAction.filter(alias.filter.string())
@@ -566,11 +610,15 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
                     }
 
                     var toRemove = followerAliases - leaderAliases
-
+                    val leaderAliasNames = leaderAliases.map { it.alias() }.toSet()
                     for (alias in toRemove) {
-                        log.info("Removing alias  ${alias.alias} from $followerIndexName")
-                        request.addAliasAction(AliasActions.remove().index(followerIndexName)
+                        // Only remove if it doesn't exist on the leader at all (by name).
+                        // If it exists on leader but differs (e.g. writeIndex), it was added/updated in the 'toAdd' loop above.
+                        if (!leaderAliasNames.contains(alias.alias())) {
+                            log.info("Removing alias ${alias.alias} from $followerIndexName")
+                            request.addAliasAction(AliasActions.remove().index(followerIndexName)
                                 .alias(alias.alias))
+                        }
                     }
                 }
 
@@ -642,9 +690,7 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
 
             } finally {
                 //Step 5: open the index
-                val updateRequest = UpdateMetadataRequest(followerIndexName, UpdateMetadataRequest.Type.OPEN, Requests.openIndexRequest(followerIndexName))
-                client.suspendExecute(UpdateMetadataAction.INSTANCE, updateRequest, injectSecurityContext = true)
-                log.info("Opened the index $followerIndexName now post applying static settings")
+                conditionallyOpenIndex(followerIndexName, "now post applying static settings")
 
                 //Step 6 :  Register Close Listeners again
                 registerCloseListeners()
@@ -883,6 +929,8 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
         }
         val replMetadata = replicationMetadataManager.getIndexReplicationMetadata(this.followerIndexName)
         restoreRequest.indexSettings(replMetadata.settings)
+        restoreRequest.aliasWriteIndexPolicy(RestoreSnapshotRequest.AliasWriteIndexPolicy.STRIP_WRITE_INDEX)
+
 
         try {
             val response = client.suspending(client.admin().cluster()::restoreSnapshot, defaultContext = true)(restoreRequest)
