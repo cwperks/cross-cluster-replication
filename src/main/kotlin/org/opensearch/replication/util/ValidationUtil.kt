@@ -102,10 +102,6 @@ object ValidationUtil {
             // UTF-8 should always be supported, but rethrow this if it is not for some reason
             validationException.addValidationError("Unable to determine length of $name")
         }
-
-        // Additionally we don't allow replication for system indices i.e. starts with '.'
-        if(name.startsWith("."))
-            validationException.addValidationError("Value $name must not start with '.'")
     }
 
     /**
