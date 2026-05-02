@@ -1041,7 +1041,7 @@ class StartReplicationIT: MultiClusterRestTestCase() {
         assertValidationFailure(followerClient, longIndexName, followerIndexName,
             "Value $longIndexName must not be longer than ${MetadataCreateIndexService.MAX_INDEX_NAME_BYTES} bytes")
         assertValidationFailure(followerClient, ".leaderIndex", followerIndexName,
-            "Value .leaderIndex must not start with '.'")
+            "Value .leaderIndex must not start with '.' unless it is .opendistro_security")
     }
 
     fun `test that replication is not started when start block is set`() {
@@ -1480,4 +1480,3 @@ class StartReplicationIT: MultiClusterRestTestCase() {
         }
     }
 }
-

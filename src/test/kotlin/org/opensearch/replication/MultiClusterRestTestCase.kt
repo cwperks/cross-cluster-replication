@@ -60,15 +60,21 @@ import org.junit.Before
 import org.junit.BeforeClass
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.security.KeyFactory
 import java.security.KeyManagementException
 import java.security.KeyStore
 import java.security.KeyStoreException
 import java.security.NoSuchAlgorithmException
+import java.security.PrivateKey
 import java.security.cert.CertificateException
+import java.security.cert.CertificateFactory
+import java.security.spec.PKCS8EncodedKeySpec
 import java.util.Base64
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import java.util.Collections
+import javax.net.ssl.KeyManager
+import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
@@ -82,7 +88,8 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
     class TestCluster(clusterName: String, val httpHosts: List<HttpHost>, val transportPorts: List<String>,
                       val preserveSnapshots: Boolean, val preserveIndices: Boolean,
                       val preserveClusterSettings: Boolean,
-                      val securityEnabled: Boolean) {
+                      val securityEnabled: Boolean,
+                      val standbyMode: Boolean) {
         val restClient : RestHighLevelClient
         private val connectionManager: org.apache.hc.client5.http.impl.nio.PoolingAsyncClientConnectionManager
         init {
@@ -99,7 +106,8 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
 
             })
             val sslContext = SSLContext.getInstance("SSL")
-            sslContext.init(null, trustCerts, java.security.SecureRandom())
+            val keyManagers = if (securityEnabled && standbyMode) adminCertKeyManagers() else null
+            sslContext.init(keyManagers, trustCerts, java.security.SecureRandom())
             val tlsStrategy = ClientTlsStrategyBuilder.create().setSslContext(sslContext)
                 .setHostnameVerifier { _, _ -> true } // Disable hostname verification for local cluster
                 .build()
@@ -109,7 +117,7 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
                 httpAsyncClientBuilder.setConnectionManager(connectionManager)
                 httpAsyncClientBuilder.setVersionPolicy(HttpVersionPolicy.FORCE_HTTP_1)
             }
-            configureClient(builder, getClusterSettings(clusterName), securityEnabled)
+            configureClient(builder, getClusterSettings(clusterName), securityEnabled && !standbyMode)
             builder.setStrictDeprecationMode(false)
             restClient = RestHighLevelClient(builder)
         }
@@ -123,6 +131,31 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
         var defaultSecuritySetupCompleted = false
         companion object {
             const val FS_SNAPSHOT_REPO = "repl_repo"
+        }
+
+        private fun adminCertKeyManagers(): Array<KeyManager> {
+            val testClustersDir = System.getProperty("testclusters.dir")
+                ?: throw IllegalStateException("Missing testclusters.dir system property")
+            val certDir = PathUtils.get(testClustersDir).parent.resolve("resources/test/security/plugin")
+            val certFactory = CertificateFactory.getInstance("X.509")
+            val cert = Files.newInputStream(certDir.resolve("kirk.pem")).use { certFactory.generateCertificate(it) }
+            val rootCa = Files.newInputStream(certDir.resolve("root-ca.pem")).use { certFactory.generateCertificate(it) }
+            val key = readPrivateKey(certDir.resolve("kirk-key.pem"))
+            val keyStore = KeyStore.getInstance("JKS")
+            keyStore.load(null, null)
+            keyStore.setKeyEntry("admin", key, CharArray(0), arrayOf(cert, rootCa))
+            val keyManagerFactory = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+            keyManagerFactory.init(keyStore, CharArray(0))
+            return keyManagerFactory.keyManagers
+        }
+
+        private fun readPrivateKey(path: java.nio.file.Path): PrivateKey {
+            val keyBytes = Base64.getDecoder().decode(
+                Files.readAllLines(path)
+                    .filterNot { it.startsWith("-----") }
+                    .joinToString("")
+            )
+            return KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(keyBytes))
         }
     }
 
@@ -142,6 +175,7 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
             val httpHostsProp = systemProperties.get("tests.cluster.${cluster}.http_hosts") as String?
             val transportHostsProp = systemProperties.get("tests.cluster.${cluster}.transport_hosts") as String?
             val securityEnabled = systemProperties.get("tests.cluster.${cluster}.security_enabled") as String?
+            val standbyMode = systemProperties.get("tests.cluster.${cluster}.standby_mode") as String?
 
             requireNotNull(httpHostsProp) { "Missing http hosts property for cluster: $cluster."}
             requireNotNull(transportHostsProp) { "Missing transport hosts property for cluster: $cluster."}
@@ -159,7 +193,7 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
             val httpHosts = httpHostsProp.split(',').map { HttpHost.create("$protocol://$it") }
             val transportPorts = transportHostsProp.split(',')
             return TestCluster(cluster, httpHosts, transportPorts, preserveSnapshots,
-                               preserveIndices, preserveClusterSettings, securityEnabled.equals("true", true))
+                               preserveIndices, preserveClusterSettings, securityEnabled.equals("true", true), standbyMode.equals("true", true))
         }
 
         private fun getClusterConfigurations(): List<ClusterConfiguration> {
@@ -269,7 +303,7 @@ abstract class MultiClusterRestTestCase : OpenSearchTestCase() {
     fun setup() {
         testClusters.values.forEach {
             registerSnapshotRepository(it)
-            if(it.securityEnabled && !it.defaultSecuritySetupCompleted)
+            if(it.securityEnabled && !it.standbyMode && !it.defaultSecuritySetupCompleted)
                 setupDefaultSecurityRoles(it)
         }
     }

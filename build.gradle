@@ -483,6 +483,17 @@ testClusters {
         setting 'path.repo', repo.absolutePath
         if(_numNodes == 1) jvmArgs "${-> getDebugJvmArgs(debugPort++)}"
     }
+    standbyFollowCluster {
+        testDistribution = "ARCHIVE"
+        plugin(project.tasks.bundlePlugin.archiveFile)
+        if(securityEnabled) {
+            plugin(provider(securityPluginFile))
+        }
+        int debugPort = 5020
+        if (_numNodes > 1) numberOfNodes = _numNodes
+        setting 'path.repo', repo.absolutePath
+        if(_numNodes == 1) jvmArgs "${-> getDebugJvmArgs(debugPort++)}"
+    }
 }
 
 def configureCluster(OpenSearchCluster cluster, Boolean securityEnabled) {
@@ -538,6 +549,7 @@ int endJmxPort = startJmxPort
 integTest {
     useCluster testClusters.leaderCluster
     useCluster testClusters.followCluster
+    useCluster testClusters.standbyFollowCluster
     systemProperty 'testclusters.dir', project.layout.buildDirectory.get().file("testclusters").asFile.absolutePath
     systemProperty "password", "admin" // setting it to `admin` explicitly since its a custom security setup
 
@@ -594,6 +606,7 @@ integTest {
             systemProperty "tests.cluster.${cluster.name}.http_hosts", "${-> allHttpSocketURI}"
             systemProperty "tests.cluster.${cluster.name}.transport_hosts", "${-> alltransportSocketURI}"
             systemProperty "tests.cluster.${cluster.name}.security_enabled", "${-> securityEnabled.toString()}"
+            systemProperty "tests.cluster.${cluster.name}.standby_mode", "${-> cluster.name.equals("standbyFollowCluster").toString()}"
             systemProperty "tests.cluster.${cluster.name}.total_nodes", "${-> _numNodes.toString()}"
             configureCluster(cluster, securityEnabled)
         }
@@ -630,7 +643,7 @@ jacocoTestReport {
     getExecutionData().setFrom(fileTree(buildDir).include("/jacoco/*.exec"))
 }
 
-def addSecurityConfig(OpenSearchNode node, Boolean securityEnabled) {
+def addSecurityConfig(OpenSearchNode node, Boolean securityEnabled, Boolean standbyMode = false) {
     if(securityEnabled) {
         // Security plugin doesn't have the executable to write demo certs based on relative path
         // writing config files manually till then
@@ -652,14 +665,17 @@ def addSecurityConfig(OpenSearchNode node, Boolean securityEnabled) {
         node.setting("plugins.security.ssl.http.pemtrustedcas_filepath", "root-ca.pem")
         node.setting("plugins.security.ssl.http.clientauth_mode", "OPTIONAL")
         node.setting("plugins.security.allow_unsafe_democertificates", "true")
-        node.setting("plugins.security.allow_default_init_securityindex", "true")
+        node.setting("plugins.security.allow_default_init_securityindex", standbyMode ? "false" : "true")
+        if (standbyMode) {
+            node.setting("plugins.security.standby_mode", "true")
+        }
         node.setting("plugins.security.authcz.admin_dn", "[\"CN=kirk,OU=client,O=client,L=test,C=de\"]")
         node.setting("plugins.security.audit.type", "internal_opensearch")
         node.setting("plugins.security.enable_snapshot_restore_privilege", "true")
         node.setting("plugins.security.check_snapshot_restore_write_privileges", "true")
         node.setting("plugins.security.restapi.roles_enabled", "[\"all_access\", \"security_rest_api_access\"]")
         node.setting("plugins.security.system_indices.enabled", "true")
-        node.setting("plugins.security.system_indices.indices", "[\".replication-metadata-store\"]")
+        node.setting("plugins.security.system_indices.indices", "[\".replication-metadata-store\", \".opendistro_security\"]")
     }
 }
 
@@ -671,12 +687,17 @@ afterEvaluate {
     testClusters.followCluster.nodes.each { node ->
         addSecurityConfig(node, securityEnabled)
     }
+
+    testClusters.standbyFollowCluster.nodes.each { node ->
+        addSecurityConfig(node, securityEnabled, true)
+    }
 }
 check.dependsOn jacocoTestReport
 
 run {
     useCluster testClusters.leaderCluster
     useCluster testClusters.followCluster
+    useCluster testClusters.standbyFollowCluster
     doFirst {
         getClusters().forEach { cluster ->
             configureCluster(cluster, securityEnabled)

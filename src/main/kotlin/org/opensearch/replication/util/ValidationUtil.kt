@@ -37,6 +37,7 @@ import java.util.*
 import java.util.function.Predicate
 
 object ValidationUtil {
+    private const val OPENDISTRO_SECURITY_INDEX = ".opendistro_security"
 
     private val log = LogManager.getLogger(ValidationUtil::class.java)
 
@@ -103,9 +104,9 @@ object ValidationUtil {
             validationException.addValidationError("Unable to determine length of $name")
         }
 
-        // Additionally we don't allow replication for system indices i.e. starts with '.'
-        if(name.startsWith("."))
-            validationException.addValidationError("Value $name must not start with '.'")
+        // Only the Security plugin has explicit standby-mode support today.
+        if (name.startsWith(".") && name != OPENDISTRO_SECURITY_INDEX)
+            validationException.addValidationError("Value $name must not start with '.' unless it is $OPENDISTRO_SECURITY_INDEX")
     }
 
     /**

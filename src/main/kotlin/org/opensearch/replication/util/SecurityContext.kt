@@ -40,12 +40,13 @@ class SecurityContext {
         private val log = LogManager.getLogger(SecurityContext::class.java)
         const val OPENDISTRO_SECURITY_USER = "_opendistro_security_user"
         const val OPENDISTRO_SECURITY_INJECTED_ROLES_VALIDATION = "opendistro_security_injected_roles_validation"
+        const val CCR_REPLICATED_SYSTEM_INDEX = "opensearch.ccr.replicated_system_index"
         const val REPLICATION_PLUGIN_USER = "ccr_user"
 
         val ADMIN_USER = User(REPLICATION_PLUGIN_USER, null, listOf("all_access"), mapOf<String, String>())
 
         val ALL_TRANSIENTS = listOf(ConfigConstants.OPENSEARCH_SECURITY_INJECTED_ROLES,
-                ConfigConstants.INJECTED_USER, OPENDISTRO_SECURITY_USER)
+                ConfigConstants.INJECTED_USER, OPENDISTRO_SECURITY_USER, CCR_REPLICATED_SYSTEM_INDEX)
 
         val LEADER_USER_ACTIONS = listOf(GetChangesAction.NAME, GetFileChunkAction.NAME)
         val FOLLOWER_USER_ACTIONS = listOf(ReplayChangesAction.NAME,
@@ -92,6 +93,7 @@ class SecurityContext {
 
         fun setBasedOnActions(replMetadata: ReplicationMetadata?, action: String, threadContext: ThreadContext) {
             if(replMetadata != null) {
+                markReplicatedSystemIndexIfNeeded(replMetadata, threadContext)
                 if(LEADER_USER_ACTIONS.contains(action)) {
                     asRolesInjection(threadContext, replMetadata.leaderContext.user?.toInjectedRoles())
                     return
@@ -102,6 +104,24 @@ class SecurityContext {
             }
             // For all other requests - using admin
             asRolesInjection(threadContext, ADMIN_USER.toInjectedRoles())
+        }
+
+        fun markReplicatedSystemIndexIfNeeded(replMetadata: ReplicationMetadata?, threadContext: ThreadContext) {
+            if (replMetadata == null) {
+                return
+            }
+            val leaderIndex = replMetadata.leaderContext.resource
+            val followerIndex = replMetadata.followerContext.resource
+            if (leaderIndex == followerIndex) {
+                log.debug("Marking CCR replicated system index context for follower index [{}]", followerIndex)
+                threadContext.putTransient(CCR_REPLICATED_SYSTEM_INDEX, followerIndex)
+            } else {
+                log.debug(
+                    "Skipping CCR replicated system index context because leader [{}] and follower [{}] differ",
+                    leaderIndex,
+                    followerIndex
+                )
+            }
         }
     }
 }
