@@ -442,8 +442,7 @@ class CrossClusterWaitForHttpResource {
 * To run security tests
 */
 def securityEnabled = findProperty("security") == "true"
-def ccrTestDistribution = System.getProperty("tests.distribution", "ARCHIVE")
-ext.localOpenSearchServerJar = System.getProperty("tests.opensearch.server.jar")
+def ccrTestDistribution = System.getProperty("tests.distribution", "INTEG_TEST")
 
 File repo = file("$buildDir/testclusters/repo")
 def _numNodes = findProperty('numNodes') as Integer ?: 2
@@ -633,9 +632,6 @@ jacocoTestReport {
 }
 
 def addSecurityConfig(OpenSearchNode node, Boolean securityEnabled) {
-    if(project.localOpenSearchServerJar != null && project.localOpenSearchServerJar.isBlank() == false) {
-        node.extraJarFile(file(project.localOpenSearchServerJar))
-    }
     if(securityEnabled) {
         // Security plugin doesn't have the executable to write demo certs based on relative path
         // writing config files manually till then
