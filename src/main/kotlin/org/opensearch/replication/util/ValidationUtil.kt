@@ -39,6 +39,9 @@ import java.util.function.Predicate
 object ValidationUtil {
 
     private val log = LogManager.getLogger(ValidationUtil::class.java)
+    private val REPLICABLE_SYSTEM_INDICES = setOf(".tasks")
+
+    fun isReplicableSystemIndex(name: String): Boolean = REPLICABLE_SYSTEM_INDICES.contains(name)
 
     fun validateIndexSettings(
         environment: Environment,
@@ -103,8 +106,8 @@ object ValidationUtil {
             validationException.addValidationError("Unable to determine length of $name")
         }
 
-        // Additionally we don't allow replication for system indices i.e. starts with '.'
-        if(name.startsWith("."))
+        // Only system indices that have been explicitly verified should be replicated.
+        if(name.startsWith(".") && isReplicableSystemIndex(name) == false)
             validationException.addValidationError("Value $name must not start with '.'")
     }
 

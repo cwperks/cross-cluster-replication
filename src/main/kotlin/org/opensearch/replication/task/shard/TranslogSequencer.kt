@@ -18,6 +18,7 @@ import org.opensearch.replication.action.replay.ReplayChangesAction
 import org.opensearch.replication.action.replay.ReplayChangesRequest
 import org.opensearch.replication.metadata.store.ReplicationMetadata
 import org.opensearch.replication.util.suspendExecuteWithRetries
+import org.opensearch.replication.util.ValidationUtil
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ObsoleteCoroutinesApi
@@ -91,7 +92,8 @@ class TranslogSequencer(scope: CoroutineScope, private val replicationMetadata: 
                                     ReplayChangesAction.INSTANCE,
                                     replayRequest,
                                     log = log,
-                                    retryOn = retryOnExceptions
+                                    retryOn = retryOnExceptions,
+                                    defaultContext = ValidationUtil.isReplicableSystemIndex(followerShardId.indexName)
                                 )
                                 if (replayResponse.shardInfo.failed > 0) {
                                     replayResponse.shardInfo.failures.forEachIndexed { i, failure ->

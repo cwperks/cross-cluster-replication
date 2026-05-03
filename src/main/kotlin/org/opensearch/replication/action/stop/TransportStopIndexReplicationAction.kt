@@ -28,6 +28,7 @@ import org.opensearch.replication.seqno.RemoteClusterRetentionLeaseHelper
 import org.opensearch.replication.util.coroutineContext
 import org.opensearch.replication.util.suspendExecute
 import org.opensearch.replication.util.suspending
+import org.opensearch.replication.util.ValidationUtil
 import org.opensearch.replication.util.waitForClusterStateUpdate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -97,11 +98,17 @@ class TransportStopIndexReplicationAction @Inject constructor(transportService: 
         launch(Dispatchers.Unconfined + threadPool.coroutineContext()) {
             try {
                 log.info("Stopping index replication on index:" + request.indexName)
+                val useDefaultContext = ValidationUtil.isReplicableSystemIndex(request.indexName)
 
                 // NOTE: We remove the block first before validation since it is harmless idempotent operations and
                 //       gives back control of the index even if any failure happens in one of the steps post this.
                 val updateIndexBlockRequest = UpdateIndexBlockRequest(request.indexName,IndexBlockUpdateType.REMOVE_BLOCK)
-                val updateIndexBlockResponse = client.suspendExecute(UpdateIndexBlockAction.INSTANCE, updateIndexBlockRequest, injectSecurityContext = true)
+                val updateIndexBlockResponse = client.suspendExecute(
+                        UpdateIndexBlockAction.INSTANCE,
+                        updateIndexBlockRequest,
+                        injectSecurityContext = true,
+                        defaultContext = useDefaultContext
+                )
                 if(!updateIndexBlockResponse.isAcknowledged) {
                     throw OpenSearchException("Failed to remove index block on ${request.indexName}")
                 }
@@ -119,7 +126,12 @@ class TransportStopIndexReplicationAction @Inject constructor(transportService: 
                         state.routingTable.hasIndex(request.indexName)) {
 
                     var updateRequest = UpdateMetadataRequest(request.indexName, UpdateMetadataRequest.Type.CLOSE, Requests.closeIndexRequest(request.indexName))
-                    var closeResponse = client.suspendExecute(UpdateMetadataAction.INSTANCE, updateRequest, injectSecurityContext = true)
+                    var closeResponse = client.suspendExecute(
+                            UpdateMetadataAction.INSTANCE,
+                            updateRequest,
+                            injectSecurityContext = true,
+                            defaultContext = useDefaultContext
+                    )
                     if (!closeResponse.isAcknowledged) {
                         throw OpenSearchException("Unable to close index: ${request.indexName}")
                     }
@@ -143,7 +155,11 @@ class TransportStopIndexReplicationAction @Inject constructor(transportService: 
                 // Index will be deleted if stop is called while it is restoring. So no need to reopen
                 if (!restoring &&
                         state.routingTable.hasIndex(request.indexName)) {
-                    val reopenResponse = client.suspending(client.admin().indices()::open, injectSecurityContext = true)(OpenIndexRequest(request.indexName))
+                    val reopenResponse = client.suspending(
+                            client.admin().indices()::open,
+                            injectSecurityContext = true,
+                            defaultContext = useDefaultContext
+                    )(OpenIndexRequest(request.indexName))
                     if (!reopenResponse.isAcknowledged) {
                         throw OpenSearchException("Failed to reopen index: ${request.indexName}")
                     }

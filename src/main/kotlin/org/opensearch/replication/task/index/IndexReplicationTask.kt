@@ -37,6 +37,7 @@ import org.opensearch.replication.util.stackTraceToString
 import org.opensearch.replication.util.startTask
 import org.opensearch.replication.util.suspendExecute
 import org.opensearch.replication.util.suspending
+import org.opensearch.replication.util.ValidationUtil
 import org.opensearch.replication.util.waitForNextChange
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -914,13 +915,17 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
         // INDEX_TRANSLOG_GENERATION_THRESHOLD_SIZE_SETTING - This setting sets each generation size for the translog.
         // This ensures that, we don't have to search the huge translog files for the given range and ensuring that
         // the searches are optimal within a generation and skip searching the generations based on translog checkpoints
-        val settingsBuilder = Settings.builder()
-                .put(REPLICATION_INDEX_TRANSLOG_PRUNING_ENABLED_SETTING.key, true)
-                .put(IndexSettings.INDEX_TRANSLOG_GENERATION_THRESHOLD_SIZE_SETTING.key, ByteSizeValue(32, ByteSizeUnit.MB))
-        val updateSettingsRequest = remoteClient.admin().indices().prepareUpdateSettings().setSettings(settingsBuilder).setIndices(leaderIndex.name).request()
-        val updateResponse = remoteClient.suspending(remoteClient.admin().indices()::updateSettings, injectSecurityContext = true)(updateSettingsRequest)
-        if(!updateResponse.isAcknowledged) {
-            log.error("Unable to update setting for translog pruning based on retention lease leaderIndex=${leaderIndex.name}")
+        if (ValidationUtil.isReplicableSystemIndex(leaderIndex.name)) {
+            log.info("Skipping leader translog pruning settings update for replicable system index ${leaderIndex.name}")
+        } else {
+            val settingsBuilder = Settings.builder()
+                    .put(REPLICATION_INDEX_TRANSLOG_PRUNING_ENABLED_SETTING.key, true)
+                    .put(IndexSettings.INDEX_TRANSLOG_GENERATION_THRESHOLD_SIZE_SETTING.key, ByteSizeValue(32, ByteSizeUnit.MB))
+            val updateSettingsRequest = remoteClient.admin().indices().prepareUpdateSettings().setSettings(settingsBuilder).setIndices(leaderIndex.name).request()
+            val updateResponse = remoteClient.suspending(remoteClient.admin().indices()::updateSettings, injectSecurityContext = true)(updateSettingsRequest)
+            if(!updateResponse.isAcknowledged) {
+                log.error("Unable to update setting for translog pruning based on retention lease leaderIndex=${leaderIndex.name}")
+            }
         }
 
         val restoreRequest = client.admin().cluster()

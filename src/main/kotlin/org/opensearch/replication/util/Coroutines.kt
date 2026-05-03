@@ -231,7 +231,7 @@ class OpenSearchClientThreadContextElement(private val threadContext: ThreadCont
                 threadContext.stashContext()
             else
                 threadContext.newStoredContext(true)
-            if(injectSecurityContext) {
+            if(injectSecurityContext && defaultContext == false) {
                 // Populate relevant transients from replication metadata
                 SecurityContext.setBasedOnActions(replicationMetadata, action, threadContext)
             }
