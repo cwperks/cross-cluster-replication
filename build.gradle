@@ -451,7 +451,7 @@ testClusters {
         if(securityEnabled) {
             plugin(provider(securityPluginFile))
         }
-        testDistribution = "ARCHIVE"
+        testDistribution = "INTEG_TEST"
         if(knnEnabled) {
             plugin(provider(knnPluginFile))
             testDistribution = "ARCHIVE"
@@ -466,7 +466,7 @@ testClusters {
         if(_numNodes == 1) jvmArgs "${-> getDebugJvmArgs(debugPort++)}"
     }
     followCluster {
-        testDistribution = "ARCHIVE"
+        testDistribution = "INTEG_TEST"
         plugin(project.tasks.bundlePlugin.archiveFile)
         if(securityEnabled) {
             plugin(provider(securityPluginFile))
