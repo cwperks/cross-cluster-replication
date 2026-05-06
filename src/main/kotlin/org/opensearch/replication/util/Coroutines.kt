@@ -64,9 +64,10 @@ suspend fun <Req, Resp> Client.suspending(fn: (Req, ActionListener<Resp>) -> Uni
 
 suspend fun <Req, Resp> Client.suspending(replicationMetadata: ReplicationMetadata,
                                   fn: (req: Req, ActionListener<Resp>) -> Unit,
+                                  injectSecurityContext: Boolean = true,
                                   defaultContext: Boolean = false): suspend (Req) -> Resp {
     return { req: Req ->
-        withContext(this.threadPool().coroutineContext(replicationMetadata, "default", true, defaultContext)) {
+        withContext(this.threadPool().coroutineContext(replicationMetadata, "default", injectSecurityContext, defaultContext)) {
             suspendCancellableCoroutine<Resp> { cont -> fn(req, CoroutineActionListener(cont)) }
         }
     }

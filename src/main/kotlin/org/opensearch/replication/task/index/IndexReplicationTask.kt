@@ -942,7 +942,12 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
 
 
         try {
-            val response = client.suspending(replMetadata, client.admin().cluster()::restoreSnapshot, defaultContext = true)(restoreRequest)
+            val response = client.suspending(
+                replMetadata,
+                client.admin().cluster()::restoreSnapshot,
+                injectSecurityContext = false,
+                defaultContext = true
+            )(restoreRequest)
             if (response.restoreInfo != null) {
                 if (response.restoreInfo.failedShards() != 0) {
                     throw ReplicationException("Restore failed: $response")
