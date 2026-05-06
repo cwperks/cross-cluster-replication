@@ -103,9 +103,6 @@ object ValidationUtil {
             validationException.addValidationError("Unable to determine length of $name")
         }
 
-        // Additionally we don't allow replication for system indices i.e. starts with '.'
-        if(name.startsWith("."))
-            validationException.addValidationError("Value $name must not start with '.'")
     }
 
     /**
