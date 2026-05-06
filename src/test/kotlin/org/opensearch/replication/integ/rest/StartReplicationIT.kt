@@ -140,25 +140,31 @@ class StartReplicationIT: MultiClusterRestTestCase() {
     fun `test start replication supports same-name dot index without security plugin`() {
         Assume.assumeFalse("Security-specific system index authorization is covered separately", getNamedCluster(LEADER).securityEnabled)
         Assume.assumeFalse("Security-specific system index authorization is covered separately", getNamedCluster(FOLLOWER).securityEnabled)
-        val indexName = ".index"
+        val indexName = ".${randomAlphaOfLength(10).lowercase(Locale.ROOT)}"
         val followerClient = getClientForCluster(FOLLOWER)
         val leaderClient = getClientForCluster(LEADER)
         createConnectionBetweenClusters(FOLLOWER, LEADER)
-        val createIndexResponse = leaderClient.indices().create(CreateIndexRequest(indexName), RequestOptions.DEFAULT)
-        assertThat(createIndexResponse.isAcknowledged).isTrue()
+        try {
+            val createIndexResponse = leaderClient.indices().create(CreateIndexRequest(indexName), RequestOptions.DEFAULT)
+            assertThat(createIndexResponse.isAcknowledged).isTrue()
 
-        followerClient.startReplication(StartReplicationRequest("source", indexName, indexName), waitForRestore = true)
-        assertBusy {
-            assertThat(followerClient.indices().exists(GetIndexRequest(indexName), RequestOptions.DEFAULT)).isEqualTo(true)
+            followerClient.startReplication(StartReplicationRequest("source", indexName, indexName), waitForRestore = true)
+            assertBusy {
+                assertThat(followerClient.indices().exists(GetIndexRequest(indexName), RequestOptions.DEFAULT)).isEqualTo(true)
+            }
+
+            val source = mapOf("status" to "replicated")
+            leaderClient.index(IndexRequest(indexName).id("1").source(source), RequestOptions.DEFAULT)
+            assertBusy({
+                val getResponse = followerClient.get(GetRequest(indexName, "1"), RequestOptions.DEFAULT)
+                assertThat(getResponse.isExists).isTrue()
+                assertThat(getResponse.sourceAsMap).isEqualTo(source)
+            }, 60L, TimeUnit.SECONDS)
+        } finally {
+            runCatching { followerClient.stopReplication(indexName) }
+            runCatching { followerClient.indices().delete(DeleteIndexRequest(indexName), RequestOptions.DEFAULT) }
+            runCatching { leaderClient.indices().delete(DeleteIndexRequest(indexName), RequestOptions.DEFAULT) }
         }
-
-        val source = mapOf("status" to "replicated")
-        leaderClient.index(IndexRequest(indexName).id("1").source(source), RequestOptions.DEFAULT)
-        assertBusy({
-            val getResponse = followerClient.get(GetRequest(indexName, "1"), RequestOptions.DEFAULT)
-            assertThat(getResponse.isExists).isTrue()
-            assertThat(getResponse.sourceAsMap).isEqualTo(source)
-        }, 60L, TimeUnit.SECONDS)
     }
 
     fun `test start replication with settings`() {
