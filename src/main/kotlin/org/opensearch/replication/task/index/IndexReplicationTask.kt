@@ -84,6 +84,7 @@ import org.opensearch.core.index.Index
 import org.opensearch.index.IndexService
 import org.opensearch.index.IndexSettings
 import org.opensearch.index.shard.IndexShard
+import org.opensearch.indices.SystemIndexRegistry
 import org.opensearch.core.index.shard.ShardId
 import org.opensearch.indices.cluster.IndicesClusterStateService
 import org.opensearch.indices.recovery.RecoveryState
@@ -917,10 +918,14 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
         val settingsBuilder = Settings.builder()
                 .put(REPLICATION_INDEX_TRANSLOG_PRUNING_ENABLED_SETTING.key, true)
                 .put(IndexSettings.INDEX_TRANSLOG_GENERATION_THRESHOLD_SIZE_SETTING.key, ByteSizeValue(32, ByteSizeUnit.MB))
-        val updateSettingsRequest = remoteClient.admin().indices().prepareUpdateSettings().setSettings(settingsBuilder).setIndices(leaderIndex.name).request()
-        val updateResponse = remoteClient.suspending(remoteClient.admin().indices()::updateSettings, injectSecurityContext = true)(updateSettingsRequest)
-        if(!updateResponse.isAcknowledged) {
-            log.error("Unable to update setting for translog pruning based on retention lease leaderIndex=${leaderIndex.name}")
+        if (SystemIndexRegistry.matchesSystemIndexPattern(leaderIndex.name) == false) {
+            val updateSettingsRequest = remoteClient.admin().indices().prepareUpdateSettings().setSettings(settingsBuilder).setIndices(leaderIndex.name).request()
+            val updateResponse = remoteClient.suspending(remoteClient.admin().indices()::updateSettings, injectSecurityContext = true)(updateSettingsRequest)
+            if(!updateResponse.isAcknowledged) {
+                log.error("Unable to update setting for translog pruning based on retention lease leaderIndex=${leaderIndex.name}")
+            }
+        } else {
+            log.info("Skipping leader translog settings update for registered system index [{}]", leaderIndex.name)
         }
 
         val restoreRequest = client.admin().cluster()
@@ -937,7 +942,7 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
 
 
         try {
-            val response = client.suspending(client.admin().cluster()::restoreSnapshot, defaultContext = true)(restoreRequest)
+            val response = client.suspending(replMetadata, client.admin().cluster()::restoreSnapshot, defaultContext = true)(restoreRequest)
             if (response.restoreInfo != null) {
                 if (response.restoreInfo.failedShards() != 0) {
                     throw ReplicationException("Restore failed: $response")

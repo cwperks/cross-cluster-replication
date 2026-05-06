@@ -288,8 +288,6 @@ class UpdateAutoFollowPatternIT: MultiClusterRestTestCase() {
             "Value +leader must not start with '_' or '-' or '+'")
         assertPatternNameValidation(followerClient, longIndexPatternName,
             "Value $longIndexPatternName must not be longer than ${MetadataCreateIndexService.MAX_INDEX_NAME_BYTES} bytes")
-        assertPatternNameValidation(followerClient, ".leaderIndex",
-            "Value .leaderIndex must not start with '.'")
     }
 
     private fun assertPatternNameValidation(followerClient: RestHighLevelClient, patternName: String,

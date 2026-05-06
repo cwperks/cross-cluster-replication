@@ -234,6 +234,8 @@ class OpenSearchClientThreadContextElement(private val threadContext: ThreadCont
             if(injectSecurityContext) {
                 // Populate relevant transients from replication metadata
                 SecurityContext.setBasedOnActions(replicationMetadata, action, threadContext)
+            } else if(defaultContext) {
+                SecurityContext.markReplicatedSystemIndexIfNeeded(replicationMetadata, threadContext)
             }
         }
     }
