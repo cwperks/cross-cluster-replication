@@ -53,6 +53,7 @@ import org.opensearch.replication.updateReplicationStartBlockSetting
 import org.opensearch.replication.updateAutofollowRetrySetting
 import org.opensearch.replication.updateAutoFollowConcurrentStartReplicationJobSetting
 import org.opensearch.replication.waitForShardTaskStart
+import org.opensearch.test.rest.OpenSearchRestTestCase
 import java.lang.Thread.sleep
 import java.util.HashMap
 import java.util.concurrent.TimeUnit
@@ -110,6 +111,34 @@ class UpdateAutoFollowPatternIT: MultiClusterRestTestCase() {
             }, 60, TimeUnit.SECONDS)
         } finally {
             followerClient.deleteAutoFollowPattern(connectionAlias, indexPatternName)
+        }
+    }
+
+    fun `test auto follow data stream backing index does not recreate follower data stream`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        val leaderClient = getClientForCluster(LEADER)
+        val dataStreamName = "logs-ccr-${randomAlphaOfLength(6).lowercase(Locale.ROOT)}"
+        val templateName = "$dataStreamName-template"
+        createConnectionBetweenClusters(FOLLOWER, LEADER, connectionAlias)
+        try {
+            putDataStreamTemplate(leaderClient, templateName, "$dataStreamName*")
+            indexDataStreamDoc(leaderClient, dataStreamName, "leader-doc")
+            val leaderBackingIndex = getDataStreamBackingIndex(leaderClient, dataStreamName)
+
+            followerClient.updateAutoFollowPattern(connectionAlias, indexPatternName, ".ds-$dataStreamName*")
+
+            assertBusy({
+                Assertions.assertThat(followerClient.indices().exists(GetIndexRequest(leaderBackingIndex), RequestOptions.DEFAULT))
+                        .isTrue()
+                followerClient.waitForShardTaskStart(leaderBackingIndex, waitForShardTask)
+                Assertions.assertThat(searchDocCount(followerClient, leaderBackingIndex)).isEqualTo(1)
+            }, 90, TimeUnit.SECONDS)
+            Assertions.assertThat(dataStreamExists(followerClient, dataStreamName)).isFalse()
+        } finally {
+            followerClient.deleteAutoFollowPattern(connectionAlias, indexPatternName)
+            deleteDataStream(followerClient, dataStreamName)
+            deleteDataStream(leaderClient, dataStreamName)
+            deleteIndexTemplate(leaderClient, templateName)
         }
     }
 
@@ -481,6 +510,100 @@ class UpdateAutoFollowPatternIT: MultiClusterRestTestCase() {
         }
         return indexName
     }
+
+    private fun putDataStreamTemplate(client: RestHighLevelClient, templateName: String, indexPattern: String) {
+        val request = Request("PUT", "/_index_template/$templateName")
+        request.setJsonEntity("""
+            {
+              "index_patterns": ["$indexPattern"],
+              "data_stream": {},
+              "template": {
+                "mappings": {
+                  "properties": {
+                    "@timestamp": {
+                      "type": "date"
+                    },
+                    "message": {
+                      "type": "keyword"
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent())
+        client.lowLevelClient.performRequest(request)
+    }
+
+    private fun indexDataStreamDoc(client: RestHighLevelClient, dataStreamName: String, message: String) {
+        val request = Request("POST", "/$dataStreamName/_doc?refresh=true")
+        request.setJsonEntity("""
+            {
+              "@timestamp": "2026-05-07T00:00:00Z",
+              "message": "$message"
+            }
+        """.trimIndent())
+        client.lowLevelClient.performRequest(request)
+    }
+
+    private fun getDataStreamBackingIndex(client: RestHighLevelClient, dataStreamName: String): String {
+        val response = client.lowLevelClient.performRequest(Request("GET", "/_data_stream/$dataStreamName"))
+        val body = OpenSearchRestTestCase.entityAsMap(response)
+        val dataStreams = body["data_streams"] as List<Map<String, Any>>
+        val dataStream = dataStreams.first()
+        val indices = dataStream["indices"] as List<Map<String, Any>>
+        return indices.first()["index_name"] as String
+    }
+
+    private fun dataStreamExists(client: RestHighLevelClient, dataStreamName: String): Boolean {
+        return try {
+            client.lowLevelClient.performRequest(Request("GET", "/_data_stream/$dataStreamName"))
+            true
+        } catch (e: ResponseException) {
+            if (e.response.statusLine.statusCode == HttpStatus.SC_NOT_FOUND) {
+                false
+            } else {
+                throw e
+            }
+        }
+    }
+
+    private fun searchDocCount(client: RestHighLevelClient, indexOrDataStreamName: String): Int {
+        val request = Request("GET", "/$indexOrDataStreamName/_search")
+        request.setJsonEntity("""{"track_total_hits": true}""")
+        val response = try {
+            client.lowLevelClient.performRequest(request)
+        } catch (e: ResponseException) {
+            if (e.response.statusLine.statusCode == HttpStatus.SC_SERVICE_UNAVAILABLE) {
+                return -1
+            }
+            throw e
+        }
+        val body = OpenSearchRestTestCase.entityAsMap(response)
+        val hits = body["hits"] as Map<String, Any>
+        val total = hits["total"] as Map<String, Any>
+        return total["value"] as Int
+    }
+
+    private fun deleteDataStream(client: RestHighLevelClient, dataStreamName: String) {
+        try {
+            client.lowLevelClient.performRequest(Request("DELETE", "/_data_stream/$dataStreamName"))
+        } catch (e: ResponseException) {
+            if (e.response.statusLine.statusCode != HttpStatus.SC_NOT_FOUND) {
+                throw e
+            }
+        }
+    }
+
+    private fun deleteIndexTemplate(client: RestHighLevelClient, templateName: String) {
+        try {
+            client.lowLevelClient.performRequest(Request("DELETE", "/_index_template/$templateName"))
+        } catch (e: ResponseException) {
+            if (e.response.statusLine.statusCode != HttpStatus.SC_NOT_FOUND) {
+                throw e
+            }
+        }
+    }
+
     fun getAutoFollowTasks(clusterName: String): List<TaskInfo> {
         return getReplicationTaskList(clusterName, AutoFollowExecutor.TASK_NAME + "*")
     }

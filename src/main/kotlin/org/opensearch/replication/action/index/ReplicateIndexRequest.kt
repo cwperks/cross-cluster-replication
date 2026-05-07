@@ -107,8 +107,11 @@ class ReplicateIndexRequest : AcknowledgedRequest<ReplicateIndexRequest>, Indice
             return validationException
         }
 
-        validateName(leaderIndex, validationException)
-        validateName(followerIndex, validationException)
+        val allowDataStreamBackingIndex = isAutoFollowRequest
+                && leaderIndex.startsWith(".ds-")
+                && followerIndex.startsWith(".ds-")
+        validateName(leaderIndex, validationException, allowDataStreamBackingIndex)
+        validateName(followerIndex, validationException, allowDataStreamBackingIndex)
 
         if(useRoles != null && (useRoles!!.size < 2 || useRoles!![LEADER_CLUSTER_ROLE] == null ||
                 useRoles!![FOLLOWER_CLUSTER_ROLE] == null)) {
