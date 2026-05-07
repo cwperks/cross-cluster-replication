@@ -145,7 +145,16 @@ class UpdateAutoFollowPatternIT: MultiClusterRestTestCase() {
                         .isTrue()
                 followerClient.waitForShardTaskStart(leaderIndexName, waitForShardTask)
             }, 60, TimeUnit.SECONDS)
+            val originalFollowerUuid = getIndexSetting(followerClient, leaderIndexName, "index.uuid")
+            val originalFollowerCreationDate = getIndexSetting(followerClient, leaderIndexName, "index.creation_date")
+            log.info(
+                    "Auto-follow delete/recreate test: initial follower metadata index={} uuid={} creation_date={}",
+                    leaderIndexName,
+                    originalFollowerUuid,
+                    originalFollowerCreationDate
+            )
 
+            log.info("Auto-follow delete/recreate test: deleting leader index={}", leaderIndexName)
             val deleteIndexResponse = leaderClient.indices().delete(DeleteIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
             Assertions.assertThat(deleteIndexResponse.isAcknowledged).isTrue()
             followerClient.waitForReplicationStop(leaderIndexName)
@@ -154,6 +163,7 @@ class UpdateAutoFollowPatternIT: MultiClusterRestTestCase() {
                         .isFalse()
             }, 60, TimeUnit.SECONDS)
 
+            log.info("Auto-follow delete/recreate test: recreating leader index={}", leaderIndexName)
             val recreateIndexResponse = leaderClient.indices().create(CreateIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
             Assertions.assertThat(recreateIndexResponse.isAcknowledged).isTrue()
             leaderClient.index(IndexRequest(leaderIndexName).id("new-doc").source(recreatedSourceMap), RequestOptions.DEFAULT)
@@ -167,6 +177,13 @@ class UpdateAutoFollowPatternIT: MultiClusterRestTestCase() {
                         .isFalse()
                 followerClient.waitForShardTaskStart(leaderIndexName, waitForShardTask)
             }, 90, TimeUnit.SECONDS)
+            assertRecreatedFollowerIndexMetadata(
+                    leaderClient,
+                    followerClient,
+                    leaderIndexName,
+                    originalFollowerUuid,
+                    originalFollowerCreationDate
+            )
         } finally {
             val resetSettingsRequest = ClusterUpdateSettingsRequest()
             resetSettingsRequest.transientSettings(Settings.builder().putNull("plugins.replication.replicate.delete_index").build())
@@ -205,9 +222,19 @@ class UpdateAutoFollowPatternIT: MultiClusterRestTestCase() {
                         .isTrue()
                 followerClient.waitForShardTaskStart(leaderIndexName, waitForShardTask)
             }, 60, TimeUnit.SECONDS)
+            val originalFollowerUuid = getIndexSetting(followerClient, leaderIndexName, "index.uuid")
+            val originalFollowerCreationDate = getIndexSetting(followerClient, leaderIndexName, "index.creation_date")
+            log.info(
+                    "Auto-follow quick delete/recreate test: initial follower metadata index={} uuid={} creation_date={}",
+                    leaderIndexName,
+                    originalFollowerUuid,
+                    originalFollowerCreationDate
+            )
 
+            log.info("Auto-follow quick delete/recreate test: deleting leader index={}", leaderIndexName)
             val deleteIndexResponse = leaderClient.indices().delete(DeleteIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
             Assertions.assertThat(deleteIndexResponse.isAcknowledged).isTrue()
+            log.info("Auto-follow quick delete/recreate test: immediately recreating leader index={}", leaderIndexName)
             val recreateIndexResponse = leaderClient.indices().create(CreateIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
             Assertions.assertThat(recreateIndexResponse.isAcknowledged).isTrue()
             leaderClient.index(IndexRequest(leaderIndexName).id("new-doc").source(recreatedSourceMap), RequestOptions.DEFAULT)
@@ -221,6 +248,13 @@ class UpdateAutoFollowPatternIT: MultiClusterRestTestCase() {
                         .isFalse()
                 followerClient.waitForShardTaskStart(leaderIndexName, waitForShardTask)
             }, 120, TimeUnit.SECONDS)
+            assertRecreatedFollowerIndexMetadata(
+                    leaderClient,
+                    followerClient,
+                    leaderIndexName,
+                    originalFollowerUuid,
+                    originalFollowerCreationDate
+            )
         } finally {
             val resetSettingsRequest = ClusterUpdateSettingsRequest()
             resetSettingsRequest.transientSettings(Settings.builder().putNull("plugins.replication.replicate.delete_index").build())
@@ -600,6 +634,40 @@ class UpdateAutoFollowPatternIT: MultiClusterRestTestCase() {
         }
         return indexName
     }
+
+    private fun assertRecreatedFollowerIndexMetadata(
+            leaderClient: RestHighLevelClient,
+            followerClient: RestHighLevelClient,
+            indexName: String,
+            originalFollowerUuid: String,
+            originalFollowerCreationDate: String
+    ) {
+        val recreatedFollowerUuid = getIndexSetting(followerClient, indexName, "index.uuid")
+        val recreatedFollowerCreationDate = getIndexSetting(followerClient, indexName, "index.creation_date")
+        log.info(
+                "Auto-follow delete/recreate test: recreated follower metadata index={} uuid={} creation_date={} original_uuid={} original_creation_date={}",
+                indexName,
+                recreatedFollowerUuid,
+                recreatedFollowerCreationDate,
+                originalFollowerUuid,
+                originalFollowerCreationDate
+        )
+        Assertions.assertThat(recreatedFollowerUuid).isNotEqualTo(originalFollowerUuid)
+        Assertions.assertThat(recreatedFollowerCreationDate).isNotEqualTo(originalFollowerCreationDate)
+        Assertions.assertThat(getIndexSetting(followerClient, indexName, "index.version.created"))
+                .isEqualTo(getIndexSetting(leaderClient, indexName, "index.version.created"))
+    }
+
+    private fun getIndexSetting(client: RestHighLevelClient, indexName: String, settingName: String): String {
+        val getSettingsRequest = GetSettingsRequest()
+        getSettingsRequest.indices(indexName)
+        getSettingsRequest.includeDefaults(true)
+        return client.indices()
+                .getSettings(getSettingsRequest, RequestOptions.DEFAULT)
+                .indexToSettings[indexName]!!
+                .get(settingName)
+    }
+
     fun getAutoFollowTasks(clusterName: String): List<TaskInfo> {
         return getReplicationTaskList(clusterName, AutoFollowExecutor.TASK_NAME + "*")
     }

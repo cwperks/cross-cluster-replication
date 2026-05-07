@@ -9,6 +9,8 @@ This includes:
 - Direct replication coverage for deleting a leader index, deleting the follower, recreating the leader index with the same name, and starting replication again.
 - Autofollow coverage for deleting a followed leader index, waiting for follower cleanup, recreating the same leader index name, and verifying autofollow starts the recreated index generation.
 - Autofollow coverage for a quick delete/recreate sequence without waiting for follower cleanup.
+- Metadata assertions that verify the recreated follower index has a new `index.uuid` and `index.creation_date`, and that `index.version.created` matches the recreated leader index.
+- Additional CCR task logging for the leader-deletion detection path and follower delete acknowledgement.
 - A design note summarizing intended standby delete behavior and guardrails.
 
 ## Findings
@@ -25,6 +27,7 @@ The likely problem area is therefore not the tested delete propagation path itse
 ## Validation
 
 - `./gradlew compileTestKotlin`
+- `./gradlew compileKotlin compileTestKotlin`
 - `./gradlew integTest --tests 'org.opensearch.replication.integ.rest.StartReplicationIT.test direct replication delete and recreate same leader index with delete propagation enabled'`
 - `./gradlew integTest --tests 'org.opensearch.replication.integ.rest.UpdateAutoFollowPatternIT.test auto follow delete and recreate same leader index with delete propagation enabled'`
 - `./gradlew integTest --tests 'org.opensearch.replication.integ.rest.UpdateAutoFollowPatternIT.test auto follow quick delete and recreate same leader index with delete propagation enabled'`

@@ -237,6 +237,12 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
                                    if (replicationSettings.replicateIndexDeletion
                                        && state.errorMsg.contains("org.opensearch.index.IndexNotFoundException - \"no such index ["
                                                + leaderIndex.name + "]\"")) {
+                                       log.info(
+                                           "Detected leader index deletion for follower={}, leader={}:{}, stopping replication so the follower index can be deleted",
+                                           followerIndexName,
+                                           leaderAlias,
+                                           leaderIndex.name
+                                       )
                                        isLeaderIndexDeleted = true
                                        stopReplication(state)
                                     } else {
@@ -785,6 +791,7 @@ open class IndexReplicationTask(id: Long, type: String, action: String, descript
                             "Follower index may need to be deleted manually."
                 )
             }
+            log.info("Follower index {} deleted after corresponding leader index {} was deleted", followerIndexName, leaderIndex.name)
         } catch (e: Exception) {
             log.error("Encountered exception while deleting $followerIndexName", e)
             throw e
