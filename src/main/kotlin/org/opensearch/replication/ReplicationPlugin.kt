@@ -129,6 +129,7 @@ import org.opensearch.replication.action.stats.TransportAutoFollowStatsAction
 import org.opensearch.replication.action.stats.TransportFollowerStatsAction
 import org.opensearch.replication.action.stats.TransportLeaderStatsAction
 import org.opensearch.replication.rest.AutoFollowStatsHandler
+import org.opensearch.replication.rest.ClusterMetadataSyncHandler
 import org.opensearch.replication.rest.FollowerStatsHandler
 import org.opensearch.replication.rest.LeaderStatsHandler
 import org.opensearch.replication.seqno.RemoteClusterStats
@@ -277,7 +278,8 @@ internal class ReplicationPlugin : Plugin(), ActionPlugin, PersistentTaskPlugin,
             ReplicationStatusHandler(),
             LeaderStatsHandler(),
             FollowerStatsHandler(),
-            AutoFollowStatsHandler())
+            AutoFollowStatsHandler(),
+            ClusterMetadataSyncHandler())
     }
 
     override fun getExecutorBuilders(settings: Settings): List<ExecutorBuilder<*>> {
