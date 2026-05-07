@@ -29,6 +29,7 @@ import org.opensearch.replication.ANALYZERS_NOT_ACCESSIBLE_FOR_REMOTE_CLUSTERS
 import org.opensearch.replication.SNAPSHOTS_NOT_ACCESSIBLE_FOR_REMOTE_CLUSTERS
 import org.opensearch.replication.stopReplication
 import org.opensearch.replication.updateReplication
+import org.opensearch.replication.waitForReplicationStop
 import org.apache.hc.core5.http.HttpStatus
 import org.apache.hc.core5.http.ContentType
 import org.apache.hc.core5.http.io.entity.StringEntity
@@ -36,6 +37,7 @@ import org.apache.hc.core5.http.io.entity.EntityUtils
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.opensearch.OpenSearchStatusException
+import org.opensearch.action.admin.cluster.settings.ClusterUpdateSettingsRequest
 import org.opensearch.action.admin.cluster.repositories.put.PutRepositoryRequest
 import org.opensearch.action.admin.cluster.snapshots.create.CreateSnapshotRequest
 import org.opensearch.action.admin.indices.alias.Alias
@@ -793,6 +795,61 @@ class StartReplicationIT: MultiClusterRestTestCase() {
         }, 15, TimeUnit.SECONDS)
     }
 
+    fun `test direct replication delete and recreate same leader index with delete propagation enabled`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        val leaderClient = getClientForCluster(LEADER)
+        val sourceMap = mapOf("name" to randomAlphaOfLength(5))
+        val recreatedSourceMap = mapOf("name" to randomAlphaOfLength(5))
+        val settings = Settings.builder()
+                .put("plugins.replication.replicate.delete_index", true)
+                .build()
+        val enableDeletePropagationRequest = ClusterUpdateSettingsRequest()
+        enableDeletePropagationRequest.transientSettings(settings)
+        followerClient.cluster().putSettings(enableDeletePropagationRequest, RequestOptions.DEFAULT)
+
+        try {
+            createConnectionBetweenClusters(FOLLOWER, LEADER)
+            val createIndexResponse = leaderClient.indices().create(CreateIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
+            assertThat(createIndexResponse.isAcknowledged).isTrue()
+            leaderClient.index(IndexRequest(leaderIndexName).id("old-doc").source(sourceMap), RequestOptions.DEFAULT)
+
+            followerClient.startReplication(StartReplicationRequest("source", leaderIndexName, followerIndexName),
+                    waitForRestore = true)
+            assertBusy({
+                assertThat(followerClient.get(GetRequest(followerIndexName).id("old-doc"), RequestOptions.DEFAULT).isExists)
+                        .isTrue()
+            }, 30, TimeUnit.SECONDS)
+
+            val deleteIndexResponse = leaderClient.indices().delete(DeleteIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
+            assertThat(deleteIndexResponse.isAcknowledged).isTrue()
+            followerClient.waitForReplicationStop(followerIndexName)
+            assertBusy({
+                assertThat(followerClient.indices().exists(GetIndexRequest(followerIndexName), RequestOptions.DEFAULT))
+                        .isFalse()
+            }, 30, TimeUnit.SECONDS)
+
+            val recreateIndexResponse = leaderClient.indices().create(CreateIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
+            assertThat(recreateIndexResponse.isAcknowledged).isTrue()
+            leaderClient.index(IndexRequest(leaderIndexName).id("new-doc").source(recreatedSourceMap), RequestOptions.DEFAULT)
+            followerClient.startReplication(StartReplicationRequest("source", leaderIndexName, followerIndexName),
+                    waitForRestore = true)
+
+            assertBusy({
+                assertThat(followerClient.get(GetRequest(followerIndexName).id("new-doc"), RequestOptions.DEFAULT).isExists)
+                        .isTrue()
+                assertThat(followerClient.get(GetRequest(followerIndexName).id("old-doc"), RequestOptions.DEFAULT).isExists)
+                        .isFalse()
+            }, 30, TimeUnit.SECONDS)
+        } finally {
+            val resetSettingsRequest = ClusterUpdateSettingsRequest()
+            resetSettingsRequest.transientSettings(Settings.builder().putNull("plugins.replication.replicate.delete_index").build())
+            followerClient.cluster().putSettings(resetSettingsRequest, RequestOptions.DEFAULT)
+            runCatching { followerClient.stopReplication(followerIndexName) }
+            runCatching { followerClient.indices().delete(DeleteIndexRequest(followerIndexName), RequestOptions.DEFAULT) }
+            runCatching { leaderClient.indices().delete(DeleteIndexRequest(leaderIndexName), RequestOptions.DEFAULT) }
+        }
+    }
+
     fun `test forcemerge on leader during replication bootstrap`() {
         val settings = Settings.builder()
             .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, 20)
@@ -1480,4 +1537,3 @@ class StartReplicationIT: MultiClusterRestTestCase() {
         }
     }
 }
-

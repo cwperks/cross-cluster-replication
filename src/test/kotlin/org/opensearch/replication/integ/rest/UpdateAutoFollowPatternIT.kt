@@ -27,6 +27,9 @@ import org.apache.hc.core5.http.io.entity.StringEntity
 import org.apache.logging.log4j.LogManager
 import org.assertj.core.api.Assertions
 import org.opensearch.action.admin.cluster.settings.ClusterUpdateSettingsRequest
+import org.opensearch.action.admin.indices.delete.DeleteIndexRequest
+import org.opensearch.action.get.GetRequest
+import org.opensearch.action.index.IndexRequest
 import org.opensearch.action.admin.indices.settings.get.GetSettingsRequest
 import org.opensearch.client.Request
 import org.opensearch.client.RequestOptions
@@ -53,6 +56,8 @@ import org.opensearch.replication.updateReplicationStartBlockSetting
 import org.opensearch.replication.updateAutofollowRetrySetting
 import org.opensearch.replication.updateAutoFollowConcurrentStartReplicationJobSetting
 import org.opensearch.replication.waitForShardTaskStart
+import org.opensearch.replication.stopReplication
+import org.opensearch.replication.waitForReplicationStop
 import java.lang.Thread.sleep
 import java.util.HashMap
 import java.util.concurrent.TimeUnit
@@ -110,6 +115,120 @@ class UpdateAutoFollowPatternIT: MultiClusterRestTestCase() {
             }, 60, TimeUnit.SECONDS)
         } finally {
             followerClient.deleteAutoFollowPattern(connectionAlias, indexPatternName)
+        }
+    }
+
+    fun `test auto follow delete and recreate same leader index with delete propagation enabled`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        val leaderClient = getClientForCluster(LEADER)
+        val leaderIndexName = indexPrefix + randomAlphaOfLength(6).lowercase(Locale.ROOT)
+        val sourceMap = mapOf("name" to randomAlphaOfLength(5))
+        val recreatedSourceMap = mapOf("name" to randomAlphaOfLength(5))
+        val settings = Settings.builder()
+                .put("plugins.replication.replicate.delete_index", true)
+                .build()
+        val enableDeletePropagationRequest = ClusterUpdateSettingsRequest()
+        enableDeletePropagationRequest.transientSettings(settings)
+        followerClient.cluster().putSettings(enableDeletePropagationRequest, RequestOptions.DEFAULT)
+
+        createConnectionBetweenClusters(FOLLOWER, LEADER, connectionAlias)
+        try {
+            followerClient.updateAutoFollowPattern(connectionAlias, indexPatternName, indexPattern)
+
+            val createIndexResponse = leaderClient.indices().create(CreateIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
+            Assertions.assertThat(createIndexResponse.isAcknowledged).isTrue()
+            leaderClient.index(IndexRequest(leaderIndexName).id("old-doc").source(sourceMap), RequestOptions.DEFAULT)
+            assertBusy({
+                Assertions.assertThat(followerClient.indices().exists(GetIndexRequest(leaderIndexName), RequestOptions.DEFAULT))
+                        .isTrue()
+                Assertions.assertThat(followerClient.get(GetRequest(leaderIndexName).id("old-doc"), RequestOptions.DEFAULT).isExists)
+                        .isTrue()
+                followerClient.waitForShardTaskStart(leaderIndexName, waitForShardTask)
+            }, 60, TimeUnit.SECONDS)
+
+            val deleteIndexResponse = leaderClient.indices().delete(DeleteIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
+            Assertions.assertThat(deleteIndexResponse.isAcknowledged).isTrue()
+            followerClient.waitForReplicationStop(leaderIndexName)
+            assertBusy({
+                Assertions.assertThat(followerClient.indices().exists(GetIndexRequest(leaderIndexName), RequestOptions.DEFAULT))
+                        .isFalse()
+            }, 60, TimeUnit.SECONDS)
+
+            val recreateIndexResponse = leaderClient.indices().create(CreateIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
+            Assertions.assertThat(recreateIndexResponse.isAcknowledged).isTrue()
+            leaderClient.index(IndexRequest(leaderIndexName).id("new-doc").source(recreatedSourceMap), RequestOptions.DEFAULT)
+
+            assertBusy({
+                Assertions.assertThat(followerClient.indices().exists(GetIndexRequest(leaderIndexName), RequestOptions.DEFAULT))
+                        .isTrue()
+                Assertions.assertThat(followerClient.get(GetRequest(leaderIndexName).id("new-doc"), RequestOptions.DEFAULT).isExists)
+                        .isTrue()
+                Assertions.assertThat(followerClient.get(GetRequest(leaderIndexName).id("old-doc"), RequestOptions.DEFAULT).isExists)
+                        .isFalse()
+                followerClient.waitForShardTaskStart(leaderIndexName, waitForShardTask)
+            }, 90, TimeUnit.SECONDS)
+        } finally {
+            val resetSettingsRequest = ClusterUpdateSettingsRequest()
+            resetSettingsRequest.transientSettings(Settings.builder().putNull("plugins.replication.replicate.delete_index").build())
+            followerClient.cluster().putSettings(resetSettingsRequest, RequestOptions.DEFAULT)
+            runCatching { followerClient.deleteAutoFollowPattern(connectionAlias, indexPatternName) }
+            runCatching { followerClient.stopReplication(leaderIndexName) }
+            runCatching { followerClient.indices().delete(DeleteIndexRequest(leaderIndexName), RequestOptions.DEFAULT) }
+            runCatching { leaderClient.indices().delete(DeleteIndexRequest(leaderIndexName), RequestOptions.DEFAULT) }
+        }
+    }
+
+    fun `test auto follow quick delete and recreate same leader index with delete propagation enabled`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        val leaderClient = getClientForCluster(LEADER)
+        val leaderIndexName = indexPrefix + randomAlphaOfLength(6).lowercase(Locale.ROOT)
+        val sourceMap = mapOf("name" to randomAlphaOfLength(5))
+        val recreatedSourceMap = mapOf("name" to randomAlphaOfLength(5))
+        val settings = Settings.builder()
+                .put("plugins.replication.replicate.delete_index", true)
+                .build()
+        val enableDeletePropagationRequest = ClusterUpdateSettingsRequest()
+        enableDeletePropagationRequest.transientSettings(settings)
+        followerClient.cluster().putSettings(enableDeletePropagationRequest, RequestOptions.DEFAULT)
+
+        createConnectionBetweenClusters(FOLLOWER, LEADER, connectionAlias)
+        try {
+            followerClient.updateAutoFollowPattern(connectionAlias, indexPatternName, indexPattern)
+
+            val createIndexResponse = leaderClient.indices().create(CreateIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
+            Assertions.assertThat(createIndexResponse.isAcknowledged).isTrue()
+            leaderClient.index(IndexRequest(leaderIndexName).id("old-doc").source(sourceMap), RequestOptions.DEFAULT)
+            assertBusy({
+                Assertions.assertThat(followerClient.indices().exists(GetIndexRequest(leaderIndexName), RequestOptions.DEFAULT))
+                        .isTrue()
+                Assertions.assertThat(followerClient.get(GetRequest(leaderIndexName).id("old-doc"), RequestOptions.DEFAULT).isExists)
+                        .isTrue()
+                followerClient.waitForShardTaskStart(leaderIndexName, waitForShardTask)
+            }, 60, TimeUnit.SECONDS)
+
+            val deleteIndexResponse = leaderClient.indices().delete(DeleteIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
+            Assertions.assertThat(deleteIndexResponse.isAcknowledged).isTrue()
+            val recreateIndexResponse = leaderClient.indices().create(CreateIndexRequest(leaderIndexName), RequestOptions.DEFAULT)
+            Assertions.assertThat(recreateIndexResponse.isAcknowledged).isTrue()
+            leaderClient.index(IndexRequest(leaderIndexName).id("new-doc").source(recreatedSourceMap), RequestOptions.DEFAULT)
+
+            assertBusy({
+                Assertions.assertThat(followerClient.indices().exists(GetIndexRequest(leaderIndexName), RequestOptions.DEFAULT))
+                        .isTrue()
+                Assertions.assertThat(followerClient.get(GetRequest(leaderIndexName).id("new-doc"), RequestOptions.DEFAULT).isExists)
+                        .isTrue()
+                Assertions.assertThat(followerClient.get(GetRequest(leaderIndexName).id("old-doc"), RequestOptions.DEFAULT).isExists)
+                        .isFalse()
+                followerClient.waitForShardTaskStart(leaderIndexName, waitForShardTask)
+            }, 120, TimeUnit.SECONDS)
+        } finally {
+            val resetSettingsRequest = ClusterUpdateSettingsRequest()
+            resetSettingsRequest.transientSettings(Settings.builder().putNull("plugins.replication.replicate.delete_index").build())
+            followerClient.cluster().putSettings(resetSettingsRequest, RequestOptions.DEFAULT)
+            runCatching { followerClient.deleteAutoFollowPattern(connectionAlias, indexPatternName) }
+            runCatching { followerClient.stopReplication(leaderIndexName) }
+            runCatching { followerClient.indices().delete(DeleteIndexRequest(leaderIndexName), RequestOptions.DEFAULT) }
+            runCatching { leaderClient.indices().delete(DeleteIndexRequest(leaderIndexName), RequestOptions.DEFAULT) }
         }
     }
 
