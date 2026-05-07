@@ -23,6 +23,7 @@ import org.opensearch.persistent.AllocatedPersistentTask
 import org.opensearch.persistent.PersistentTaskState
 import org.opensearch.replication.util.suspending
 import org.opensearch.replication.util.suspendExecute
+import org.opensearch.replication.util.coroutineContext
 import org.opensearch.threadpool.ThreadPool
 import org.opensearch.transport.client.Client
 
@@ -44,9 +45,14 @@ class ClusterMetadataSyncTask(id: Long, type: String, action: String, descriptio
     @Volatile private var running = true
 
     fun run() {
-        val scope = CoroutineScope(SupervisorJob() + threadPool.executor(executor).asCoroutineDispatcher())
+        val scope = CoroutineScope(threadPool.coroutineContext(executor))
         scope.launch {
-            execute()
+            try {
+                execute()
+            } catch (e: Exception) {
+                log.error("Cluster metadata sync task failed for leader: $leaderAlias", e)
+                markAsFailed(e)
+            }
         }
     }
 
@@ -76,20 +82,34 @@ class ClusterMetadataSyncTask(id: Long, type: String, action: String, descriptio
         val followerTemplates: Map<String, ComposableIndexTemplate> = clusterService.state().metadata().templatesV2()
 
         // Sync templates that are new or different on leader
+        var updated = false
         for ((name, leaderTemplate) in leaderTemplates) {
             val followerTemplate = followerTemplates[name]
             if (followerTemplate == null || followerTemplate != leaderTemplate) {
                 log.info("Syncing index template [$name] from leader [$leaderAlias]")
-                try {
-                    val putRequest = org.opensearch.action.admin.indices.template.put.PutComposableIndexTemplateAction.Request(name)
-                        .indexTemplate(leaderTemplate)
-                    client.suspendExecute(
-                        org.opensearch.action.admin.indices.template.put.PutComposableIndexTemplateAction.INSTANCE,
-                        putRequest, injectSecurityContext = true)
-                } catch (e: Exception) {
-                    log.warn("Failed to sync template [$name] from leader [$leaderAlias]: ${e.message}")
-                }
+                updated = true
             }
+        }
+
+        if (updated) {
+            clusterService.submitStateUpdateTask("cluster_metadata_sync",
+                object : org.opensearch.cluster.ClusterStateUpdateTask() {
+                    override fun execute(currentState: org.opensearch.cluster.ClusterState): org.opensearch.cluster.ClusterState {
+                        val metadataBuilder = org.opensearch.cluster.metadata.Metadata.builder(currentState.metadata())
+                        for ((name, leaderTemplate) in leaderTemplates) {
+                            val followerTemplate = currentState.metadata().templatesV2()[name]
+                            if (followerTemplate == null || followerTemplate != leaderTemplate) {
+                                metadataBuilder.put(name, leaderTemplate)
+                            }
+                        }
+                        return org.opensearch.cluster.ClusterState.builder(currentState)
+                            .metadata(metadataBuilder).build()
+                    }
+
+                    override fun onFailure(source: String, e: Exception) {
+                        log.warn("Failed to sync templates from leader [$leaderAlias]: ${e.message}")
+                    }
+                })
         }
     }
 
