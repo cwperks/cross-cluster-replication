@@ -64,6 +64,8 @@ import org.opensearch.replication.rest.UpdateIndexHandler
 import org.opensearch.replication.seqno.RemoteClusterTranslogService
 import org.opensearch.replication.task.IndexCloseListener
 import org.opensearch.replication.task.autofollow.AutoFollowExecutor
+import org.opensearch.replication.task.clustermetadata.ClusterMetadataSyncExecutor
+import org.opensearch.replication.task.clustermetadata.ClusterMetadataSyncParams
 import org.opensearch.replication.task.autofollow.AutoFollowParams
 import org.opensearch.replication.task.index.IndexReplicationExecutor
 import org.opensearch.replication.task.index.IndexReplicationParams
@@ -127,6 +129,7 @@ import org.opensearch.replication.action.stats.TransportAutoFollowStatsAction
 import org.opensearch.replication.action.stats.TransportFollowerStatsAction
 import org.opensearch.replication.action.stats.TransportLeaderStatsAction
 import org.opensearch.replication.rest.AutoFollowStatsHandler
+import org.opensearch.replication.rest.ClusterMetadataSyncHandler
 import org.opensearch.replication.rest.FollowerStatsHandler
 import org.opensearch.replication.rest.LeaderStatsHandler
 import org.opensearch.replication.seqno.RemoteClusterStats
@@ -275,7 +278,8 @@ internal class ReplicationPlugin : Plugin(), ActionPlugin, PersistentTaskPlugin,
             ReplicationStatusHandler(),
             LeaderStatsHandler(),
             FollowerStatsHandler(),
-            AutoFollowStatsHandler())
+            AutoFollowStatsHandler(),
+            ClusterMetadataSyncHandler())
     }
 
     override fun getExecutorBuilders(settings: Settings): List<ExecutorBuilder<*>> {
@@ -311,7 +315,8 @@ internal class ReplicationPlugin : Plugin(), ActionPlugin, PersistentTaskPlugin,
         return listOf(
             ShardReplicationExecutor(REPLICATION_EXECUTOR_NAME_FOLLOWER, clusterService, threadPool, client, replicationMetadataManager, replicationSettings, followerClusterStats),
             IndexReplicationExecutor(REPLICATION_EXECUTOR_NAME_FOLLOWER, clusterService, threadPool, client, replicationMetadataManager, replicationSettings, settingsModule),
-            AutoFollowExecutor(REPLICATION_EXECUTOR_NAME_FOLLOWER, clusterService, threadPool, client, replicationMetadataManager, replicationSettings))
+            AutoFollowExecutor(REPLICATION_EXECUTOR_NAME_FOLLOWER, clusterService, threadPool, client, replicationMetadataManager, replicationSettings),
+            ClusterMetadataSyncExecutor(REPLICATION_EXECUTOR_NAME_FOLLOWER, clusterService, threadPool, client))
     }
 
     override fun getNamedWriteables(): List<NamedWriteableRegistry.Entry> {
@@ -329,6 +334,9 @@ internal class ReplicationPlugin : Plugin(), ActionPlugin, PersistentTaskPlugin,
 
             NamedWriteableRegistry.Entry(PersistentTaskParams::class.java, AutoFollowParams.NAME,
                                          Writeable.Reader { inp -> AutoFollowParams(inp) }),
+
+            NamedWriteableRegistry.Entry(PersistentTaskParams::class.java, ClusterMetadataSyncParams.NAME,
+                                         Writeable.Reader { inp -> ClusterMetadataSyncParams(inp) }),
 
             NamedWriteableRegistry.Entry(Metadata.Custom::class.java, ReplicationStateMetadata.NAME,
                 Writeable.Reader { inp -> ReplicationStateMetadata(inp) }),
@@ -356,6 +364,9 @@ internal class ReplicationPlugin : Plugin(), ActionPlugin, PersistentTaskPlugin,
             NamedXContentRegistry.Entry(PersistentTaskParams::class.java,
                     ParseField(AutoFollowParams.NAME),
                     CheckedFunction { parser: XContentParser -> AutoFollowParams.fromXContent(parser)}),
+            NamedXContentRegistry.Entry(PersistentTaskParams::class.java,
+                    ParseField(ClusterMetadataSyncParams.NAME),
+                    CheckedFunction { parser: XContentParser -> ClusterMetadataSyncParams.fromXContent(parser)}),
             NamedXContentRegistry.Entry(Metadata.Custom::class.java,
                     ParseField(ReplicationStateMetadata.NAME),
                     CheckedFunction { parser: XContentParser -> ReplicationStateMetadata.fromXContent(parser)})
