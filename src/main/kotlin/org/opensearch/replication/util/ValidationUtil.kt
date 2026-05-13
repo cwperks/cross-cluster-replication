@@ -77,7 +77,7 @@ object ValidationUtil {
     /**
      * Validate the name against the rules that we have for index name.
      */
-    fun validateName(name: String, validationException: ValidationException) {
+    fun validateName(name: String, validationException: ValidationException, allowDataStreamBackingIndex: Boolean = false) {
         if (name.lowercase(Locale.ROOT) != name)
             validationException.addValidationError("Value $name must be lowercase")
 
@@ -104,7 +104,7 @@ object ValidationUtil {
         }
 
         // Additionally we don't allow replication for system indices i.e. starts with '.'
-        if(name.startsWith("."))
+        if(name.startsWith(".") && (allowDataStreamBackingIndex == false || name.startsWith(".ds-") == false))
             validationException.addValidationError("Value $name must not start with '.'")
     }
 
