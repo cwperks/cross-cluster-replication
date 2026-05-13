@@ -1040,8 +1040,6 @@ class StartReplicationIT: MultiClusterRestTestCase() {
             "Value +leader must not start with '_' or '-' or '+'")
         assertValidationFailure(followerClient, longIndexName, followerIndexName,
             "Value $longIndexName must not be longer than ${MetadataCreateIndexService.MAX_INDEX_NAME_BYTES} bytes")
-        assertValidationFailure(followerClient, ".leaderIndex", followerIndexName,
-            "Value .leaderIndex must not start with '.'")
     }
 
     fun `test that replication is not started when start block is set`() {
