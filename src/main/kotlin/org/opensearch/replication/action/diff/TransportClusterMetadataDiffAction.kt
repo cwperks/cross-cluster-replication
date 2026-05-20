@@ -15,7 +15,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import org.apache.logging.log4j.LogManager
-import org.opensearch.action.admin.cluster.state.ClusterStateRequest
 import org.opensearch.cluster.metadata.IndexMetadata
 import org.opensearch.cluster.metadata.Metadata
 import org.opensearch.cluster.service.ClusterService
@@ -24,6 +23,7 @@ import org.opensearch.action.support.ActionFilters
 import org.opensearch.action.support.HandledTransportAction
 import org.opensearch.transport.client.Client
 import org.opensearch.common.inject.Inject
+import org.opensearch.ingest.IngestMetadata
 import org.opensearch.replication.util.completeWith
 import org.opensearch.replication.util.coroutineContext
 import org.opensearch.replication.util.suspending
@@ -44,7 +44,6 @@ class TransportClusterMetadataDiffAction @Inject constructor(
     companion object {
         private val log = LogManager.getLogger(TransportClusterMetadataDiffAction::class.java)
 
-        // Index settings that are per-cluster and should not be compared
         private val STRIPPED_SETTINGS = setOf(
             "index.uuid",
             "index.version.created",
@@ -59,7 +58,6 @@ class TransportClusterMetadataDiffAction @Inject constructor(
             "index.routing.allocation."
         )
 
-        // Settings that may legitimately differ between clusters
         private val CONDITIONAL_SETTINGS = setOf(
             "index.number_of_replicas"
         )
@@ -83,34 +81,19 @@ class TransportClusterMetadataDiffAction @Inject constructor(
 
                 val categories = mutableListOf<CategoryDiff>()
 
-                if ("component_templates" in request.categories) {
-                    categories.add(diffComponentTemplates(localMetadata, remoteMetadata))
-                }
-                if ("templates_v2" in request.categories) {
-                    categories.add(diffComposableTemplates(localMetadata, remoteMetadata))
-                }
                 if ("templates" in request.categories) {
                     categories.add(diffLegacyTemplates(localMetadata, remoteMetadata))
-                }
-                if ("stored_scripts" in request.categories) {
-                    categories.add(diffStoredScripts(localMetadata, remoteMetadata))
                 }
                 if ("ingest_pipelines" in request.categories) {
                     categories.add(diffIngestPipelines(localMetadata, remoteMetadata))
                 }
-                if ("search_pipelines" in request.categories) {
-                    categories.add(diffSearchPipelines(localMetadata, remoteMetadata))
-                }
                 if ("indices" in request.categories) {
                     categories.add(diffIndices(localMetadata, remoteMetadata))
-                }
-                if ("data_streams" in request.categories) {
-                    categories.add(diffDataStreams(localMetadata, remoteMetadata))
                 }
 
                 ClusterMetadataDiffResponse(
                     connectionName = request.connectionName,
-                    remoteMetadataVersion = remoteState.metadata().version(),
+                    remoteMetadataVersion = remoteMetadata.version(),
                     localMetadataVersion = localMetadata.version(),
                     categories = categories
                 )
@@ -118,43 +101,17 @@ class TransportClusterMetadataDiffAction @Inject constructor(
         }
     }
 
-    private fun diffComponentTemplates(local: Metadata, remote: Metadata): CategoryDiff {
-        val localNames = local.componentTemplates()?.keys().orEmpty().toSet()
-        val remoteNames = remote.componentTemplates()?.keys().orEmpty().toSet()
-        return diffNamedItems("component_templates", localNames, remoteNames) { name ->
-            local.componentTemplates().get(name) == remote.componentTemplates().get(name)
-        }
-    }
-
-    private fun diffComposableTemplates(local: Metadata, remote: Metadata): CategoryDiff {
-        val localNames = local.templatesV2()?.keys().orEmpty().toSet()
-        val remoteNames = remote.templatesV2()?.keys().orEmpty().toSet()
-        return diffNamedItems("templates_v2", localNames, remoteNames) { name ->
-            local.templatesV2().get(name) == remote.templatesV2().get(name)
-        }
-    }
-
     private fun diffLegacyTemplates(local: Metadata, remote: Metadata): CategoryDiff {
-        val localNames = local.templates().keys().toSet()
-        val remoteNames = remote.templates().keys().toSet()
+        val localNames = local.templates().keys.toMutableSet() as Set<String>
+        val remoteNames = remote.templates().keys.toMutableSet() as Set<String>
         return diffNamedItems("templates", localNames, remoteNames) { name ->
             local.templates().get(name) == remote.templates().get(name)
         }
     }
 
-    private fun diffStoredScripts(local: Metadata, remote: Metadata): CategoryDiff {
-        val localScripts = local.storedScripts()
-        val remoteScripts = remote.storedScripts()
-        val localNames = localScripts.keys.toSet()
-        val remoteNames = remoteScripts.keys.toSet()
-        return diffNamedItems("stored_scripts", localNames, remoteNames) { name ->
-            localScripts[name] == remoteScripts[name]
-        }
-    }
-
     private fun diffIngestPipelines(local: Metadata, remote: Metadata): CategoryDiff {
-        val localPipelines = local.custom<org.opensearch.ingest.IngestMetadata>("ingest")
-        val remotePipelines = remote.custom<org.opensearch.ingest.IngestMetadata>("ingest")
+        val localPipelines = local.custom<IngestMetadata>("ingest")
+        val remotePipelines = remote.custom<IngestMetadata>("ingest")
         val localNames = localPipelines?.pipelines?.keys.orEmpty()
         val remoteNames = remotePipelines?.pipelines?.keys.orEmpty()
         return diffNamedItems("ingest_pipelines", localNames, remoteNames) { name ->
@@ -162,29 +119,11 @@ class TransportClusterMetadataDiffAction @Inject constructor(
         }
     }
 
-    private fun diffSearchPipelines(local: Metadata, remote: Metadata): CategoryDiff {
-        // Search pipelines are stored as a Metadata.Custom; compare by name presence
-        val localNames = extractSearchPipelineNames(local)
-        val remoteNames = extractSearchPipelineNames(remote)
-        return diffNamedItems("search_pipelines", localNames, remoteNames) { _ -> true }
-    }
-
-    private fun extractSearchPipelineNames(metadata: Metadata): Set<String> {
-        // Search pipelines custom metadata access - best effort
-        return try {
-            val custom = metadata.custom<Metadata.Custom>("search_pipeline")
-            if (custom != null) {
-                // Use reflection or known API to get pipeline names
-                emptySet()
-            } else emptySet()
-        } catch (e: Exception) {
-            emptySet()
-        }
-    }
-
     private fun diffIndices(local: Metadata, remote: Metadata): CategoryDiff {
-        val localIndices = local.indices().keys().filter { isReplicable(local.index(it)) }.toSet()
-        val remoteIndices = remote.indices().keys().filter { isReplicable(remote.index(it)) }.toSet()
+        val allLocalNames = local.indices().keys.toMutableSet() as Set<String>
+        val allRemoteNames = remote.indices().keys.toMutableSet() as Set<String>
+        val localIndices = allLocalNames.filter { isReplicable(local.index(it)) }.toSet()
+        val remoteIndices = allRemoteNames.filter { isReplicable(remote.index(it)) }.toSet()
 
         val remoteOnly = (remoteIndices - localIndices).toList()
         val localOnly = (localIndices - remoteIndices).toList()
@@ -209,12 +148,10 @@ class TransportClusterMetadataDiffAction @Inject constructor(
         val fields = mutableListOf<DiffField>()
 
         // Compare mappings
-        if (local.mapping() != remote.mapping()) {
-            val localSource = local.mapping()?.source()?.string()
-            val remoteSource = remote.mapping()?.source()?.string()
-            if (localSource != remoteSource) {
-                fields.add(DiffField("mappings", "[differs]", "[differs]", "included"))
-            }
+        val localMapping = local.mapping()?.source()?.string()
+        val remoteMapping = remote.mapping()?.source()?.string()
+        if (localMapping != remoteMapping) {
+            fields.add(DiffField("mappings", "[differs]", "[differs]", "included"))
         }
 
         // Compare user-facing settings (excluding stripped ones)
@@ -222,6 +159,7 @@ class TransportClusterMetadataDiffAction @Inject constructor(
         val remoteSettings = remote.settings
         val allKeys = (localSettings.keySet() + remoteSettings.keySet())
             .filter { key -> !isStrippedSetting(key) }
+            .toSet()
 
         for (key in allKeys) {
             val localVal = localSettings.get(key)
@@ -233,8 +171,8 @@ class TransportClusterMetadataDiffAction @Inject constructor(
         }
 
         // Compare aliases
-        val localAliases = local.aliases.keys().toSet()
-        val remoteAliases = remote.aliases.keys().toSet()
+        val localAliases = local.aliases.keys.toMutableSet() as Set<String>
+        val remoteAliases = remote.aliases.keys.toMutableSet() as Set<String>
         for (alias in remoteAliases - localAliases) {
             fields.add(DiffField("aliases.$alias", null, "present", "included"))
         }
@@ -250,16 +188,6 @@ class TransportClusterMetadataDiffAction @Inject constructor(
         }
 
         return fields
-    }
-
-    private fun diffDataStreams(local: Metadata, remote: Metadata): CategoryDiff {
-        val localNames = local.dataStreams().keys
-        val remoteNames = remote.dataStreams().keys
-        return diffNamedItems("data_streams", localNames, remoteNames) { name ->
-            val localDs = local.dataStreams()[name]
-            val remoteDs = remote.dataStreams()[name]
-            localDs?.indices?.map { it.name } == remoteDs?.indices?.map { it.name }
-        }
     }
 
     private fun diffNamedItems(

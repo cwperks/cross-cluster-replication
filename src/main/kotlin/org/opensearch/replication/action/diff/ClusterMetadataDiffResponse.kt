@@ -53,38 +53,48 @@ class ClusterMetadataDiffResponse : ActionResponse, ToXContentObject {
         this.connectionName = inp.readString()
         this.remoteMetadataVersion = inp.readVLong()
         this.localMetadataVersion = inp.readVLong()
-        this.categories = inp.readList { stream ->
-            val category = stream.readString()
-            val inSync = stream.readVInt()
-            val remoteOnly = stream.readStringList()
-            val localOnly = stream.readStringList()
-            val diverged = stream.readList { s ->
-                val name = s.readString()
-                val fields = s.readList { f ->
-                    DiffField(f.readString(), f.readOptionalString(), f.readOptionalString(), f.readString())
+        val catCount = inp.readVInt()
+        val cats = mutableListOf<CategoryDiff>()
+        repeat(catCount) {
+            val category = inp.readString()
+            val inSync = inp.readVInt()
+            val remoteOnly = inp.readStringList()
+            val localOnly = inp.readStringList()
+            val divCount = inp.readVInt()
+            val diverged = mutableListOf<DivergedItem>()
+            repeat(divCount) {
+                val name = inp.readString()
+                val fieldCount = inp.readVInt()
+                val fields = mutableListOf<DiffField>()
+                repeat(fieldCount) {
+                    fields.add(DiffField(inp.readString(), inp.readOptionalString(), inp.readOptionalString(), inp.readString()))
                 }
-                DivergedItem(name, fields)
+                diverged.add(DivergedItem(name, fields))
             }
-            CategoryDiff(category, inSync, remoteOnly, localOnly, diverged)
+            cats.add(CategoryDiff(category, inSync, remoteOnly, localOnly, diverged))
         }
+        this.categories = cats
     }
 
     override fun writeTo(out: StreamOutput) {
         out.writeString(connectionName)
         out.writeVLong(remoteMetadataVersion)
         out.writeVLong(localMetadataVersion)
-        out.writeList(categories) { stream, cat ->
-            stream.writeString(cat.category)
-            stream.writeVInt(cat.inSync)
-            stream.writeStringCollection(cat.remoteOnly)
-            stream.writeStringCollection(cat.localOnly)
-            stream.writeList(cat.diverged) { s, item ->
-                s.writeString(item.name)
-                s.writeList(item.fields) { f, field ->
-                    f.writeString(field.path)
-                    f.writeOptionalString(field.local)
-                    f.writeOptionalString(field.remote)
-                    f.writeString(field.policy)
+        out.writeVInt(categories.size)
+        for (cat in categories) {
+            out.writeString(cat.category)
+            out.writeVInt(cat.inSync)
+            out.writeStringCollection(cat.remoteOnly)
+            out.writeStringCollection(cat.localOnly)
+            out.writeVInt(cat.diverged.size)
+            for (item in cat.diverged) {
+                out.writeString(item.name)
+                out.writeVInt(item.fields.size)
+                for (field in item.fields) {
+                    out.writeString(field.path)
+                    out.writeOptionalString(field.local)
+                    out.writeOptionalString(field.remote)
+                    out.writeString(field.policy)
                 }
             }
         }
