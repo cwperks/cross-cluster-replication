@@ -97,6 +97,123 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         assertThat(templatesCategory["in_sync"] as Int).isGreaterThanOrEqualTo(1)
     }
 
+    fun `test diff API detects diverged index with different replica count`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        val leaderClient = getClientForCluster(LEADER)
+        createConnectionBetweenClusters(FOLLOWER, LEADER)
+
+        val indexName = "test-diff-replicas"
+
+        // Create same index on both clusters with different replica counts
+        val leaderRequest = CreateIndexRequest(indexName)
+        leaderRequest.settings(org.opensearch.common.settings.Settings.builder()
+            .put("index.number_of_shards", 1)
+            .put("index.number_of_replicas", 2))
+        leaderClient.indices().create(leaderRequest, RequestOptions.DEFAULT)
+
+        val followerRequest = CreateIndexRequest(indexName)
+        followerRequest.settings(org.opensearch.common.settings.Settings.builder()
+            .put("index.number_of_shards", 1)
+            .put("index.number_of_replicas", 1))
+        followerClient.indices().create(followerRequest, RequestOptions.DEFAULT)
+
+        val diffResponse = clusterMetadataDiff(followerClient, "source", "indices")
+        val categories = diffResponse["categories"] as Map<String, Any>
+        val indicesCategory = categories["indices"] as Map<String, Any>
+
+        assertThat(indicesCategory["diverged"] as Int).isGreaterThanOrEqualTo(1)
+
+        // Verify field-level detail shows the replica count difference with conditional policy
+        val items = indicesCategory["items"] as Map<String, Any>
+        val divergedItems = items["diverged"] as List<Map<String, Any>>
+        val divergedIndex = divergedItems.find { it["name"] == indexName }
+        assertThat(divergedIndex).isNotNull()
+
+        val fields = divergedIndex!!["fields"] as List<Map<String, Any>>
+        val replicaField = fields.find { (it["path"] as String).contains("number_of_replicas") }
+        assertThat(replicaField).isNotNull()
+        assertThat(replicaField!!["local"]).isEqualTo("1")
+        assertThat(replicaField["remote"]).isEqualTo("2")
+        assertThat(replicaField["policy"]).isEqualTo("conditional")
+    }
+
+    fun `test diff API detects diverged index with different mappings`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        val leaderClient = getClientForCluster(LEADER)
+        createConnectionBetweenClusters(FOLLOWER, LEADER)
+
+        val indexName = "test-diff-mappings"
+
+        // Create index on leader with a mapping
+        val leaderRequest = CreateIndexRequest(indexName)
+        leaderRequest.mapping(mapOf("properties" to mapOf(
+            "title" to mapOf("type" to "text"),
+            "timestamp" to mapOf("type" to "date")
+        )))
+        leaderClient.indices().create(leaderRequest, RequestOptions.DEFAULT)
+
+        // Create same index on follower with a different mapping
+        val followerRequest = CreateIndexRequest(indexName)
+        followerRequest.mapping(mapOf("properties" to mapOf(
+            "title" to mapOf("type" to "keyword"),
+            "count" to mapOf("type" to "integer")
+        )))
+        followerClient.indices().create(followerRequest, RequestOptions.DEFAULT)
+
+        val diffResponse = clusterMetadataDiff(followerClient, "source", "indices")
+        val categories = diffResponse["categories"] as Map<String, Any>
+        val indicesCategory = categories["indices"] as Map<String, Any>
+
+        assertThat(indicesCategory["diverged"] as Int).isGreaterThanOrEqualTo(1)
+
+        val items = indicesCategory["items"] as Map<String, Any>
+        val divergedItems = items["diverged"] as List<Map<String, Any>>
+        val divergedIndex = divergedItems.find { it["name"] == indexName }
+        assertThat(divergedIndex).isNotNull()
+
+        val fields = divergedIndex!!["fields"] as List<Map<String, Any>>
+        val mappingField = fields.find { (it["path"] as String) == "mappings" }
+        assertThat(mappingField).isNotNull()
+        assertThat(mappingField!!["policy"]).isEqualTo("included")
+    }
+
+    fun `test diff API detects ingest pipeline on remote only`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        val leaderClient = getClientForCluster(LEADER)
+        createConnectionBetweenClusters(FOLLOWER, LEADER)
+
+        // Create an ingest pipeline on the leader only
+        val pipelineName = "test-diff-pipeline"
+        val putPipelineRequest = Request("PUT", "/_ingest/pipeline/$pipelineName")
+        putPipelineRequest.setJsonEntity("""
+            {
+              "description": "test pipeline for diff",
+              "processors": [
+                {
+                  "set": {
+                    "field": "diff_test",
+                    "value": "true"
+                  }
+                }
+              ]
+            }
+        """.trimIndent())
+        leaderClient.lowLevelClient.performRequest(putPipelineRequest)
+
+        val diffResponse = clusterMetadataDiff(followerClient, "source", "ingest_pipelines")
+        val categories = diffResponse["categories"] as Map<String, Any>
+        val pipelinesCategory = categories["ingest_pipelines"] as Map<String, Any>
+
+        assertThat(pipelinesCategory["remote_only"] as Int).isGreaterThanOrEqualTo(1)
+
+        // Verify the pipeline name appears in the remote_only list
+        if (pipelinesCategory.containsKey("items")) {
+            val items = pipelinesCategory["items"] as Map<String, Any>
+            val remoteOnly = items["remote_only"] as List<String>
+            assertThat(remoteOnly).contains(pipelineName)
+        }
+    }
+
     private fun clusterMetadataDiff(
         client: org.opensearch.client.RestHighLevelClient,
         connectionName: String,
