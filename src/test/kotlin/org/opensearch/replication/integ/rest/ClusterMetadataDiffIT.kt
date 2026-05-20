@@ -225,6 +225,8 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         }
         val request = Request("GET", path)
         val response = client.lowLevelClient.performRequest(request)
-        return OpenSearchRestTestCase.entityAsMap(response)
+        val responseMap = OpenSearchRestTestCase.entityAsMap(response)
+        logger.info("Diff response for [$path]: $responseMap")
+        return responseMap
     }
 }
