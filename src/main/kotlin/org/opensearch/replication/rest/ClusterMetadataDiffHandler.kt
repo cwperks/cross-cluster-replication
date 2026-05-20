@@ -24,7 +24,7 @@ class ClusterMetadataDiffHandler : BaseRestHandler() {
 
     override fun routes(): List<RestHandler.Route> {
         return listOf(
-            RestHandler.Route(RestRequest.Method.GET, "/_plugins/_replication/{connectionName}/_diff")
+            RestHandler.Route(RestRequest.Method.GET, "/_plugins/_replication/_cluster/{connectionName}/_diff")
         )
     }
 

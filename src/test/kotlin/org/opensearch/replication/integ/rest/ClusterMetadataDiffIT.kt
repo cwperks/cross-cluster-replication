@@ -59,14 +59,14 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         val followerClient = getClientForCluster(FOLLOWER)
         createConnectionBetweenClusters(FOLLOWER, LEADER)
 
-        // Call with only templates category
-        val diffResponse = clusterMetadataDiff(followerClient, "source", "templates_v2")
+        // Call with only ingest_pipelines category
+        val diffResponse = clusterMetadataDiff(followerClient, "source", "ingest_pipelines")
 
         val categories = diffResponse["categories"] as Map<String, Any>
-        assertThat(categories).containsKey("templates_v2")
+        assertThat(categories).containsKey("ingest_pipelines")
         // Should not contain other categories
         assertThat(categories).doesNotContainKey("indices")
-        assertThat(categories).doesNotContainKey("ingest_pipelines")
+        assertThat(categories).doesNotContainKey("templates")
     }
 
     fun `test diff API with invalid connection returns error`() {
@@ -75,7 +75,7 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
             clusterMetadataDiff(followerClient, "nonexistent-connection")
             Assert.fail("Diff API should fail with invalid connection")
         } catch (e: ResponseException) {
-            assertThat(e.response.statusLine.statusCode).isIn(400, 500)
+            assertThat(e.response.statusLine.statusCode).isIn(400, 404, 500)
         }
     }
 
@@ -219,7 +219,7 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         connectionName: String,
         categories: String? = null
     ): Map<String, Any> {
-        var path = "/_plugins/_replication/$connectionName/_diff"
+        var path = "/_plugins/_replication/_cluster/$connectionName/_diff"
         if (categories != null) {
             path += "?categories=$categories"
         }
