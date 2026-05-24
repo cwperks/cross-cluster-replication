@@ -24,6 +24,7 @@ data class DivergedItem(val name: String, val fields: List<DiffField>)
 
 data class CategoryDiff(
     val category: String,
+    val status: String,
     val inSync: Int,
     val remoteOnly: List<String>,
     val localOnly: List<String>,
@@ -57,6 +58,7 @@ class ClusterMetadataDiffResponse : ActionResponse, ToXContentObject {
         val cats = mutableListOf<CategoryDiff>()
         repeat(catCount) {
             val category = inp.readString()
+            val status = inp.readString()
             val inSync = inp.readVInt()
             val remoteOnly = inp.readStringList()
             val localOnly = inp.readStringList()
@@ -71,7 +73,7 @@ class ClusterMetadataDiffResponse : ActionResponse, ToXContentObject {
                 }
                 diverged.add(DivergedItem(name, fields))
             }
-            cats.add(CategoryDiff(category, inSync, remoteOnly, localOnly, diverged))
+            cats.add(CategoryDiff(category, status, inSync, remoteOnly, localOnly, diverged))
         }
         this.categories = cats
     }
@@ -83,6 +85,7 @@ class ClusterMetadataDiffResponse : ActionResponse, ToXContentObject {
         out.writeVInt(categories.size)
         for (cat in categories) {
             out.writeString(cat.category)
+            out.writeString(cat.status)
             out.writeVInt(cat.inSync)
             out.writeStringCollection(cat.remoteOnly)
             out.writeStringCollection(cat.localOnly)
@@ -109,6 +112,7 @@ class ClusterMetadataDiffResponse : ActionResponse, ToXContentObject {
         builder.startObject("categories")
         for (cat in categories) {
             builder.startObject(cat.category)
+            builder.field("status", cat.status)
             builder.field("in_sync", cat.inSync)
             builder.field("remote_only", cat.remoteOnly.size)
             builder.field("local_only", cat.localOnly.size)

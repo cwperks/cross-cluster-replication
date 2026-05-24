@@ -67,6 +67,21 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         // Should not contain other categories
         assertThat(categories).doesNotContainKey("indices")
         assertThat(categories).doesNotContainKey("templates")
+        val pipelinesCategory = categories["ingest_pipelines"] as Map<String, Any>
+        assertThat(pipelinesCategory["status"]).isEqualTo("compared")
+    }
+
+    fun `test diff API rejects unsupported category`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        createConnectionBetweenClusters(FOLLOWER, LEADER)
+
+        try {
+            clusterMetadataDiff(followerClient, "source", "templates_v2")
+            Assert.fail("Diff API should reject unsupported categories")
+        } catch (e: ResponseException) {
+            assertThat(e.response.statusLine.statusCode).isEqualTo(400)
+            assertThat(e.message).contains("unsupported categories")
+        }
     }
 
     fun `test diff API with invalid connection returns error`() {
@@ -219,7 +234,7 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         connectionName: String,
         categories: String? = null
     ): Map<String, Any> {
-        var path = "/_plugins/_replication/_cluster/$connectionName/_diff"
+        var path = "/_plugins/_replication/_cluster/$connectionName/_metadata_diff"
         if (categories != null) {
             path += "?categories=$categories"
         }

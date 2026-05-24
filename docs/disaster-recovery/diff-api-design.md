@@ -14,7 +14,7 @@ Lives in the CCR replication plugin. Requires:
 ## API
 
 ```
-GET /_replication/cluster/<relationship-id>/_diff
+GET /_plugins/_replication/_cluster/<connection-name>/_metadata_diff
 ```
 
 Called on the **secondary only**. The secondary has both its own local state and a connection to the primary. The primary is stateless about the secondary by design.
@@ -25,13 +25,11 @@ Called on the **secondary only**. The secondary has both its own local state and
 |---|---|---|---|
 | `categories` | comma-separated | all | Filter to specific categories |
 
-Valid categories: `component_templates`, `templates_v2`, `templates`, `stored_scripts`, `ingest_pipelines`, `search_pipelines`, `persistent_settings`, `indices`, `data_streams`
+Valid categories in the current implementation: `templates`, `ingest_pipelines`, `indices`
 
-These match the handler pipeline order:
+The initial implementation compares these categories in provider order:
 ```
-component_templates → templates_v2 → templates → stored_scripts →
-ingest_pipelines → search_pipelines → persistent_settings →
-indices → data_streams
+templates → ingest_pipelines → indices
 ```
 
 ### Response
@@ -43,28 +41,22 @@ indices → data_streams
   "remote_metadata_version": 4521,
   "local_applied_metadata_version": 4519,
   "categories": {
-    "component_templates": {
+    "templates": {
+      "status": "compared",
       "in_sync": 4,
       "remote_only": 0,
       "local_only": 0,
       "diverged": 0
     },
-    "templates_v2": {
-      "in_sync": 6,
-      "remote_only": 1,
-      "local_only": 0,
-      "diverged": 0,
-      "items": {
-        "remote_only": ["logs-template-v2"]
-      }
-    },
     "ingest_pipelines": {
+      "status": "compared",
       "in_sync": 12,
       "remote_only": 0,
       "local_only": 0,
       "diverged": 0
     },
     "indices": {
+      "status": "compared",
       "in_sync": 287,
       "remote_only": 2,
       "local_only": 0,
@@ -91,12 +83,6 @@ indices → data_streams
           }
         ]
       }
-    },
-    "persistent_settings": {
-      "in_sync": 3,
-      "remote_only": 0,
-      "local_only": 0,
-      "diverged": 0
     }
   }
 }
@@ -108,11 +94,11 @@ indices → data_streams
 1. Fetch remote cluster state via ClusterStateAction
    (same mechanism the MetadataReplicationController uses)
 
-2. For each category handler:
+2. For each registered category provider:
    a. extract(remoteState) → Map<String, T>
    b. extract(localState)  → Map<String, T>
    c. Apply the replication policy:
-      - Filter to replicable items only (indices passing V2Scope.isReplicable())
+      - Filter to replicable items only
       - Strip excluded fields (index.routing.allocation.*, index.uuid, etc.)
    d. Compare:
       - In remote but not local → remote_only
@@ -173,5 +159,5 @@ Based on the metadata-replication design:
 | API | Purpose |
 |---|---|
 | `GET /_replication/cluster/<id>/status` | Is replication running? What's the lag? Any errors? |
-| `GET /_replication/cluster/<id>/_diff` | What's different right now? (this doc) |
+| `GET /_plugins/_replication/_cluster/<connection-name>/_metadata_diff` | What's different right now? (this doc) |
 | `GET /_replication/cluster/<id>/_switchover/validate` | Are all shards caught up for switchover? |

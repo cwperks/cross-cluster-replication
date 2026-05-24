@@ -13,6 +13,7 @@ package org.opensearch.replication.action.diff
 
 import org.opensearch.action.ActionRequest
 import org.opensearch.action.ActionRequestValidationException
+import org.opensearch.action.ValidateActions
 import org.opensearch.core.common.io.stream.StreamInput
 import org.opensearch.core.common.io.stream.StreamOutput
 
@@ -22,11 +23,8 @@ class ClusterMetadataDiffRequest : ActionRequest {
     val categories: Set<String>
 
     companion object {
-        val ALL_CATEGORIES = setOf(
-            "component_templates", "templates_v2", "templates", "stored_scripts",
-            "ingest_pipelines", "search_pipelines", "persistent_settings",
-            "indices", "data_streams"
-        )
+        val SUPPORTED_CATEGORIES = setOf("templates", "ingest_pipelines", "indices")
+        val ALL_CATEGORIES = SUPPORTED_CATEGORIES
     }
 
     constructor(connectionName: String, categories: Set<String> = ALL_CATEGORIES) : super() {
@@ -46,11 +44,17 @@ class ClusterMetadataDiffRequest : ActionRequest {
     }
 
     override fun validate(): ActionRequestValidationException? {
+        var validationException: ActionRequestValidationException? = null
         if (connectionName.isBlank()) {
-            val ex = ActionRequestValidationException()
-            ex.addValidationError("connection_name must not be empty")
-            return ex
+            validationException = ValidateActions.addValidationError("connection_name must not be empty", validationException)
         }
-        return null
+        val unsupportedCategories = categories - SUPPORTED_CATEGORIES
+        if (unsupportedCategories.isNotEmpty()) {
+            validationException = ValidateActions.addValidationError(
+                "unsupported categories [${unsupportedCategories.sorted().joinToString(",")}], supported categories are [${SUPPORTED_CATEGORIES.sorted().joinToString(",")}]",
+                validationException
+            )
+        }
+        return validationException
     }
 }

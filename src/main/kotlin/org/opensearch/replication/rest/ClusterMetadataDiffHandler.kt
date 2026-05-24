@@ -24,11 +24,11 @@ class ClusterMetadataDiffHandler : BaseRestHandler() {
 
     override fun routes(): List<RestHandler.Route> {
         return listOf(
-            RestHandler.Route(RestRequest.Method.GET, "/_plugins/_replication/_cluster/{connectionName}/_diff")
+            RestHandler.Route(RestRequest.Method.GET, "/_plugins/_replication/_cluster/{connectionName}/_metadata_diff")
         )
     }
 
-    override fun getName(): String = "plugins_replication_cluster_diff"
+    override fun getName(): String = "plugins_replication_cluster_metadata_diff"
 
     @Throws(IOException::class)
     override fun prepareRequest(request: RestRequest, client: NodeClient): RestChannelConsumer {

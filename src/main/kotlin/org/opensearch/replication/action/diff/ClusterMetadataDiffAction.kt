@@ -16,7 +16,7 @@ import org.opensearch.core.common.io.stream.Writeable
 
 class ClusterMetadataDiffAction : ActionType<ClusterMetadataDiffResponse>(NAME, reader) {
     companion object {
-        const val NAME = "indices:admin/plugins/replication/cluster/diff"
+        const val NAME = "cluster:admin/plugins/replication/metadata/diff"
         val INSTANCE = ClusterMetadataDiffAction()
         val reader = Writeable.Reader { inp -> ClusterMetadataDiffResponse(inp) }
     }
