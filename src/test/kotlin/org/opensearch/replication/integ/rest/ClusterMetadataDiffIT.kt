@@ -18,6 +18,7 @@ import org.opensearch.client.RequestOptions
 import org.opensearch.client.ResponseException
 import org.opensearch.client.indices.CreateIndexRequest
 import org.opensearch.client.indices.PutIndexTemplateRequest
+import org.opensearch.common.xcontent.XContentType
 import org.opensearch.replication.MultiClusterAnnotations
 import org.opensearch.replication.MultiClusterRestTestCase
 import org.opensearch.test.rest.OpenSearchRestTestCase
@@ -29,6 +30,24 @@ import org.opensearch.test.rest.OpenSearchRestTestCase
 class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
     companion object {
         private const val CONNECTION_NAME = "source"
+
+        private val LEADER_INDEX_MAPPING = """
+            {
+              "properties": {
+                "title": { "type": "text" },
+                "timestamp": { "type": "date" }
+              }
+            }
+        """.trimIndent()
+
+        private val FOLLOWER_INDEX_MAPPING = """
+            {
+              "properties": {
+                "title": { "type": "keyword" },
+                "count": { "type": "integer" }
+              }
+            }
+        """.trimIndent()
     }
 
     fun `test diff API returns categories when clusters are connected`() {
@@ -135,15 +154,21 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
 
         // Create same index on both clusters with different replica counts
         val leaderRequest = CreateIndexRequest(indexName)
-        leaderRequest.settings(org.opensearch.common.settings.Settings.builder()
-            .put("index.number_of_shards", 1)
-            .put("index.number_of_replicas", 2))
+        leaderRequest.settings("""
+            {
+              "index.number_of_shards": 1,
+              "index.number_of_replicas": 2
+            }
+        """.trimIndent(), XContentType.JSON)
         leaderClient.indices().create(leaderRequest, RequestOptions.DEFAULT)
 
         val followerRequest = CreateIndexRequest(indexName)
-        followerRequest.settings(org.opensearch.common.settings.Settings.builder()
-            .put("index.number_of_shards", 1)
-            .put("index.number_of_replicas", 1))
+        followerRequest.settings("""
+            {
+              "index.number_of_shards": 1,
+              "index.number_of_replicas": 1
+            }
+        """.trimIndent(), XContentType.JSON)
         followerClient.indices().create(followerRequest, RequestOptions.DEFAULT)
 
         val diffResponse = clusterMetadataDiff(followerClient, "indices")
@@ -171,18 +196,12 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
 
         // Create index on leader with a mapping
         val leaderRequest = CreateIndexRequest(indexName)
-        leaderRequest.mapping(mapOf("properties" to mapOf(
-            "title" to mapOf("type" to "text"),
-            "timestamp" to mapOf("type" to "date")
-        )))
+        leaderRequest.mapping(LEADER_INDEX_MAPPING, XContentType.JSON)
         leaderClient.indices().create(leaderRequest, RequestOptions.DEFAULT)
 
         // Create same index on follower with a different mapping
         val followerRequest = CreateIndexRequest(indexName)
-        followerRequest.mapping(mapOf("properties" to mapOf(
-            "title" to mapOf("type" to "keyword"),
-            "count" to mapOf("type" to "integer")
-        )))
+        followerRequest.mapping(FOLLOWER_INDEX_MAPPING, XContentType.JSON)
         followerClient.indices().create(followerRequest, RequestOptions.DEFAULT)
 
         val diffResponse = clusterMetadataDiff(followerClient, "indices")
