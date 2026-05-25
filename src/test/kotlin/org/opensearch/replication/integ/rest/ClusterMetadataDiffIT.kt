@@ -27,6 +27,9 @@ import org.opensearch.test.rest.OpenSearchRestTestCase
     MultiClusterAnnotations.ClusterConfiguration(clusterName = FOLLOWER)
 )
 class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
+    companion object {
+        private const val CONNECTION_NAME = "source"
+    }
 
     fun `test diff API returns categories when clusters are connected`() {
         val followerClient = getClientForCluster(FOLLOWER)
@@ -39,7 +42,7 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         assertThat(createIndexResponse.isAcknowledged).isTrue()
 
         // Call the diff API on the follower
-        val diffResponse = clusterMetadataDiff(followerClient, "source")
+        val diffResponse = clusterMetadataDiff(followerClient)
 
         // Verify response structure
         assertThat(diffResponse).containsKey("connection_name")
@@ -49,10 +52,9 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         assertThat(diffResponse).containsKey("categories")
 
         // The leader index should show up as remote_only in the indices category
-        val categories = diffResponse["categories"] as Map<String, Any>
-        assertThat(categories).containsKey("indices")
-        val indicesCategory = categories["indices"] as Map<String, Any>
+        val indicesCategory = category(diffResponse, "indices")
         assertThat(indicesCategory["remote_only"] as Int).isGreaterThanOrEqualTo(1)
+        assertThat(remoteOnlyItems(indicesCategory)).contains(indexName)
     }
 
     fun `test diff API with category filter`() {
@@ -60,15 +62,28 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         createConnectionBetweenClusters(FOLLOWER, LEADER)
 
         // Call with only ingest_pipelines category
-        val diffResponse = clusterMetadataDiff(followerClient, "source", "ingest_pipelines")
+        val diffResponse = clusterMetadataDiff(followerClient, "ingest_pipelines")
 
-        val categories = diffResponse["categories"] as Map<String, Any>
+        val categories = categories(diffResponse)
         assertThat(categories).containsKey("ingest_pipelines")
         // Should not contain other categories
         assertThat(categories).doesNotContainKey("indices")
         assertThat(categories).doesNotContainKey("templates")
-        val pipelinesCategory = categories["ingest_pipelines"] as Map<String, Any>
+        val pipelinesCategory = category(diffResponse, "ingest_pipelines")
         assertThat(pipelinesCategory["status"]).isEqualTo("compared")
+    }
+
+    fun `test diff API with multiple category filter`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        createConnectionBetweenClusters(FOLLOWER, LEADER)
+
+        val diffResponse = clusterMetadataDiff(followerClient, "templates,indices")
+
+        val categories = categories(diffResponse)
+        assertThat(categories).containsKeys("templates", "indices")
+        assertThat(categories).doesNotContainKey("ingest_pipelines")
+        assertThat(category(diffResponse, "templates")["status"]).isEqualTo("compared")
+        assertThat(category(diffResponse, "indices")["status"]).isEqualTo("compared")
     }
 
     fun `test diff API rejects unsupported category`() {
@@ -76,7 +91,7 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         createConnectionBetweenClusters(FOLLOWER, LEADER)
 
         try {
-            clusterMetadataDiff(followerClient, "source", "templates_v2")
+            clusterMetadataDiff(followerClient, "templates_v2")
             Assert.fail("Diff API should reject unsupported categories")
         } catch (e: ResponseException) {
             assertThat(e.response.statusLine.statusCode).isEqualTo(400)
@@ -87,7 +102,7 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
     fun `test diff API with invalid connection returns error`() {
         val followerClient = getClientForCluster(FOLLOWER)
         try {
-            clusterMetadataDiff(followerClient, "nonexistent-connection")
+            clusterMetadataDiff(followerClient, connectionName = "nonexistent-connection")
             Assert.fail("Diff API should fail with invalid connection")
         } catch (e: ResponseException) {
             assertThat(e.response.statusLine.statusCode).isIn(400, 404, 500)
@@ -106,9 +121,8 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         leaderClient.indices().putTemplate(templateRequest, RequestOptions.DEFAULT)
         followerClient.indices().putTemplate(templateRequest, RequestOptions.DEFAULT)
 
-        val diffResponse = clusterMetadataDiff(followerClient, "source", "templates")
-        val categories = diffResponse["categories"] as Map<String, Any>
-        val templatesCategory = categories["templates"] as Map<String, Any>
+        val diffResponse = clusterMetadataDiff(followerClient, "templates")
+        val templatesCategory = category(diffResponse, "templates")
         assertThat(templatesCategory["in_sync"] as Int).isGreaterThanOrEqualTo(1)
     }
 
@@ -132,20 +146,16 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
             .put("index.number_of_replicas", 1))
         followerClient.indices().create(followerRequest, RequestOptions.DEFAULT)
 
-        val diffResponse = clusterMetadataDiff(followerClient, "source", "indices")
-        val categories = diffResponse["categories"] as Map<String, Any>
-        val indicesCategory = categories["indices"] as Map<String, Any>
+        val diffResponse = clusterMetadataDiff(followerClient, "indices")
+        val indicesCategory = category(diffResponse, "indices")
 
         assertThat(indicesCategory["diverged"] as Int).isGreaterThanOrEqualTo(1)
 
         // Verify field-level detail shows the replica count difference with conditional policy
-        val items = indicesCategory["items"] as Map<String, Any>
-        val divergedItems = items["diverged"] as List<Map<String, Any>>
-        val divergedIndex = divergedItems.find { it["name"] == indexName }
+        val divergedIndex = divergedItems(indicesCategory).find { it["name"] == indexName }
         assertThat(divergedIndex).isNotNull()
 
-        val fields = divergedIndex!!["fields"] as List<Map<String, Any>>
-        val replicaField = fields.find { (it["path"] as String).contains("number_of_replicas") }
+        val replicaField = fields(divergedIndex!!).find { (it["path"] as String).contains("number_of_replicas") }
         assertThat(replicaField).isNotNull()
         assertThat(replicaField!!["local"]).isEqualTo("1")
         assertThat(replicaField["remote"]).isEqualTo("2")
@@ -175,19 +185,15 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         )))
         followerClient.indices().create(followerRequest, RequestOptions.DEFAULT)
 
-        val diffResponse = clusterMetadataDiff(followerClient, "source", "indices")
-        val categories = diffResponse["categories"] as Map<String, Any>
-        val indicesCategory = categories["indices"] as Map<String, Any>
+        val diffResponse = clusterMetadataDiff(followerClient, "indices")
+        val indicesCategory = category(diffResponse, "indices")
 
         assertThat(indicesCategory["diverged"] as Int).isGreaterThanOrEqualTo(1)
 
-        val items = indicesCategory["items"] as Map<String, Any>
-        val divergedItems = items["diverged"] as List<Map<String, Any>>
-        val divergedIndex = divergedItems.find { it["name"] == indexName }
+        val divergedIndex = divergedItems(indicesCategory).find { it["name"] == indexName }
         assertThat(divergedIndex).isNotNull()
 
-        val fields = divergedIndex!!["fields"] as List<Map<String, Any>>
-        val mappingField = fields.find { (it["path"] as String) == "mappings" }
+        val mappingField = fields(divergedIndex!!).find { (it["path"] as String) == "mappings" }
         assertThat(mappingField).isNotNull()
         assertThat(mappingField!!["policy"]).isEqualTo("included")
     }
@@ -215,24 +221,17 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         """.trimIndent())
         leaderClient.lowLevelClient.performRequest(putPipelineRequest)
 
-        val diffResponse = clusterMetadataDiff(followerClient, "source", "ingest_pipelines")
-        val categories = diffResponse["categories"] as Map<String, Any>
-        val pipelinesCategory = categories["ingest_pipelines"] as Map<String, Any>
+        val diffResponse = clusterMetadataDiff(followerClient, "ingest_pipelines")
+        val pipelinesCategory = category(diffResponse, "ingest_pipelines")
 
         assertThat(pipelinesCategory["remote_only"] as Int).isGreaterThanOrEqualTo(1)
-
-        // Verify the pipeline name appears in the remote_only list
-        if (pipelinesCategory.containsKey("items")) {
-            val items = pipelinesCategory["items"] as Map<String, Any>
-            val remoteOnly = items["remote_only"] as List<String>
-            assertThat(remoteOnly).contains(pipelineName)
-        }
+        assertThat(remoteOnlyItems(pipelinesCategory)).contains(pipelineName)
     }
 
     private fun clusterMetadataDiff(
         client: org.opensearch.client.RestHighLevelClient,
-        connectionName: String,
-        categories: String? = null
+        categories: String? = null,
+        connectionName: String = CONNECTION_NAME
     ): Map<String, Any> {
         var path = "/_plugins/_replication/_cluster/$connectionName/_metadata_diff"
         if (categories != null) {
@@ -243,5 +242,35 @@ class ClusterMetadataDiffIT : MultiClusterRestTestCase() {
         val responseMap = OpenSearchRestTestCase.entityAsMap(response)
         logger.info("Diff response for [$path]: $responseMap")
         return responseMap
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun categories(diffResponse: Map<String, Any>): Map<String, Any> {
+        return diffResponse["categories"] as Map<String, Any>
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun category(diffResponse: Map<String, Any>, name: String): Map<String, Any> {
+        return categories(diffResponse)[name] as Map<String, Any>
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun items(category: Map<String, Any>): Map<String, Any> {
+        return category["items"] as Map<String, Any>
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun remoteOnlyItems(category: Map<String, Any>): List<String> {
+        return items(category)["remote_only"] as List<String>
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun divergedItems(category: Map<String, Any>): List<Map<String, Any>> {
+        return items(category)["diverged"] as List<Map<String, Any>>
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun fields(divergedItem: Map<String, Any>): List<Map<String, Any>> {
+        return divergedItem["fields"] as List<Map<String, Any>>
     }
 }
