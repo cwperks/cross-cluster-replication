@@ -11,39 +11,21 @@
 
 package org.opensearch.replication.action.diff
 
-import org.opensearch.action.ActionRequest
 import org.opensearch.action.ActionRequestValidationException
 import org.opensearch.action.ValidateActions
-import org.opensearch.core.common.io.stream.StreamInput
-import org.opensearch.core.common.io.stream.StreamOutput
 
-class ClusterMetadataDiffRequest : ActionRequest {
-
-    val connectionName: String
-    val categories: Set<String>
+class ClusterMetadataDiffRequest(
+    val connectionName: String,
+    val categories: Set<String> = ALL_CATEGORIES
+) {
 
     companion object {
+        const val ACTION_NAME = "cluster:admin/plugins/replication/metadata/diff"
         val SUPPORTED_CATEGORIES = setOf("templates", "ingest_pipelines", "indices")
         val ALL_CATEGORIES = SUPPORTED_CATEGORIES
     }
 
-    constructor(connectionName: String, categories: Set<String> = ALL_CATEGORIES) : super() {
-        this.connectionName = connectionName
-        this.categories = categories
-    }
-
-    constructor(inp: StreamInput) : super(inp) {
-        this.connectionName = inp.readString()
-        this.categories = inp.readSet(StreamInput::readString)
-    }
-
-    override fun writeTo(out: StreamOutput) {
-        super.writeTo(out)
-        out.writeString(connectionName)
-        out.writeStringCollection(categories)
-    }
-
-    override fun validate(): ActionRequestValidationException? {
+    fun validate(): ActionRequestValidationException? {
         var validationException: ActionRequestValidationException? = null
         if (connectionName.isBlank()) {
             validationException = ValidateActions.addValidationError("connection_name must not be empty", validationException)

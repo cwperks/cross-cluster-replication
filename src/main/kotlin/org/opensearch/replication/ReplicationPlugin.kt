@@ -121,8 +121,6 @@ import org.opensearch.plugins.Plugin
 import org.opensearch.plugins.RepositoryPlugin
 import org.opensearch.replication.action.autofollow.*
 import org.opensearch.replication.action.stats.AutoFollowStatsAction
-import org.opensearch.replication.action.diff.ClusterMetadataDiffAction
-import org.opensearch.replication.action.diff.TransportClusterMetadataDiffAction
 import org.opensearch.replication.action.stats.FollowerStatsAction
 import org.opensearch.replication.action.stats.LeaderStatsAction
 import org.opensearch.replication.action.stats.TransportAutoFollowStatsAction
@@ -260,8 +258,7 @@ internal class ReplicationPlugin : Plugin(), ActionPlugin, PersistentTaskPlugin,
             ActionHandler(ReplicationStatusAction.INSTANCE,TransportReplicationStatusAction::class.java),
             ActionHandler(LeaderStatsAction.INSTANCE, TransportLeaderStatsAction::class.java),
             ActionHandler(FollowerStatsAction.INSTANCE, TransportFollowerStatsAction::class.java),
-            ActionHandler(AutoFollowStatsAction.INSTANCE, TransportAutoFollowStatsAction::class.java),
-            ActionHandler(ClusterMetadataDiffAction.INSTANCE, TransportClusterMetadataDiffAction::class.java)
+            ActionHandler(AutoFollowStatsAction.INSTANCE, TransportAutoFollowStatsAction::class.java)
         )
     }
 
@@ -280,7 +277,7 @@ internal class ReplicationPlugin : Plugin(), ActionPlugin, PersistentTaskPlugin,
             LeaderStatsHandler(),
             FollowerStatsHandler(),
             AutoFollowStatsHandler(),
-            ClusterMetadataDiffHandler())
+            ClusterMetadataDiffHandler(clusterService))
     }
 
     override fun getExecutorBuilders(settings: Settings): List<ExecutorBuilder<*>> {
