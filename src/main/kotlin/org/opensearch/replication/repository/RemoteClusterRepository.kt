@@ -30,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import org.apache.logging.log4j.LogManager
 import org.apache.lucene.index.IndexCommit
 import org.opensearch.Version
+import org.opensearch.action.NoShardAvailableActionException
 import org.opensearch.core.action.ActionListener
 import org.opensearch.action.ActionRequest
 import org.opensearch.core.action.ActionResponse
@@ -100,6 +101,14 @@ class RemoteClusterRepository(private val repositoryMetadata: RepositoryMetadata
 
         fun clusterForRepo(remoteRepoName: String) = remoteRepoName.split(REMOTE_REPOSITORY_PREFIX)[1]
         fun repoForCluster(leaderClusterName: String): String = REMOTE_REPOSITORY_PREFIX + leaderClusterName
+
+        internal fun resolvePrimaryNode(clusterState: ClusterState, shardId: ShardId): DiscoveryNode {
+            val primaryShard = clusterState.routingTable.shardRoutingTable(shardId.indexName, shardId.id).primaryShard()
+            val primaryNodeId = primaryShard.currentNodeId()
+                ?: throw NoShardAvailableActionException(shardId, "primary shard is not assigned")
+            return clusterState.nodes.get(primaryNodeId)
+                ?: throw NoShardAvailableActionException(shardId, "primary shard node is not available")
+        }
     }
 
 
@@ -287,23 +296,17 @@ class RemoteClusterRepository(private val repositoryMetadata: RepositoryMetadata
                                                     snapshotShardId: ShardId,
                                                     recoveryState: RecoveryState, listener: ActionListener<Void>) {
 
-        var multiChunkTransfer: RemoteClusterMultiChunkTransfer?
-        var restoreUUID: String?
-        var leaderShardNode: DiscoveryNode?
-        var leaderShardId: ShardId?
         val followerIndexName = store.shardId().indexName
         val followerShardId = store.shardId()
         // 1. Get all the files info from the leader cluster for this shardId
         // Node containing the shard
         val leaderClusterState = getLeaderClusterState(true, true, indexId.name)
-        val leaderShardRouting = leaderClusterState.routingTable.shardRoutingTable(snapshotShardId.indexName,
-                snapshotShardId.id).primaryShard()
-        leaderShardNode = leaderClusterState.nodes.get(leaderShardRouting.currentNodeId())
+        val leaderShardNode = resolvePrimaryNode(leaderClusterState, snapshotShardId)
         // Get the index UUID of the leader cluster for the metadata request
-        leaderShardId = ShardId(snapshotShardId.indexName,
+        val leaderShardId = ShardId(snapshotShardId.indexName,
                 leaderClusterState.metadata.index(indexId.name).indexUUID,
                 snapshotShardId.id)
-        restoreUUID = UUIDs.randomBase64UUID()
+        val restoreUUID = UUIDs.randomBase64UUID()
         val getStoreMetadataRequest = GetStoreMetadataRequest(restoreUUID, leaderShardNode, leaderShardId,
             RemoteClusterRetentionLeaseHelper.getFollowerClusterNameWithUUID(clusterService.clusterName.value(), clusterService.state().metadata.clusterUUID()),
              followerShardId)
@@ -318,7 +321,7 @@ class RemoteClusterRepository(private val repositoryMetadata: RepositoryMetadata
         val fileMetadata = ArrayList(metadataSnapshot.asMap().values)
         val totalSizeBytes = fileMetadata.sumOf { it.length() }
         log.info("Starting bootstrap restore: follower=$followerIndexName, followerShard=$followerShardId, leaderShard=$leaderShardId, fileCount=${fileMetadata.size}, totalSizeBytes=$totalSizeBytes")
-        multiChunkTransfer = RemoteClusterMultiChunkTransfer(log, clusterService.clusterName.value(), client.threadPool().threadContext,
+        val multiChunkTransfer = RemoteClusterMultiChunkTransfer(log, clusterService.clusterName.value(), client.threadPool().threadContext,
                 store, replicationSettings.concurrentFileChunks, restoreUUID, replMetadata, leaderShardNode,
                 leaderShardId, fileMetadata, leaderClusterClient, recoveryState, replicationSettings.chunkSize,
                 object : ActionListener<Void> {

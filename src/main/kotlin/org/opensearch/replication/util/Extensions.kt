@@ -18,6 +18,7 @@ import org.opensearch.commons.authuser.User
 import kotlinx.coroutines.delay
 import org.apache.logging.log4j.Logger
 import org.opensearch.OpenSearchException
+import org.opensearch.action.NoShardAvailableActionException
 import org.opensearch.OpenSearchSecurityException
 import org.opensearch.ResourceNotFoundException
 import org.opensearch.core.action.ActionListener
@@ -31,6 +32,7 @@ import org.opensearch.transport.client.Client
 import org.opensearch.common.util.concurrent.ThreadContext
 import org.opensearch.core.concurrency.OpenSearchRejectedExecutionException
 import org.opensearch.index.IndexNotFoundException
+import org.opensearch.indices.IndexClosedException
 import org.opensearch.core.index.shard.ShardId
 import org.opensearch.index.store.Store
 import org.opensearch.indices.recovery.RecoveryState
@@ -174,6 +176,8 @@ suspend fun RemoteClusterRepository.restoreShardWithRetries(
     var currentBackoff = backoff
     var retryCount = 1 // we retry 4 times after first exception. In total we are running callable function 5 times.
     retryOn.addAll(defaultRetryableExceptions())
+    retryOn.add(IndexClosedException::class.java)
+    retryOn.add(NoShardAvailableActionException::class.java)
     repeat(numberOfRetries) {
         try {
             return function(store, snapshotId, indexId, snapshotShardId, recoveryState, listener)

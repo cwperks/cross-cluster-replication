@@ -200,6 +200,45 @@ class StartReplicationIT: MultiClusterRestTestCase() {
         `validate not paused status response`(statusResp)
     }
 
+    fun `test bootstrap completes after leader closes and reopens during restore`() {
+        val followerClient = getClientForCluster(FOLLOWER)
+        val leaderClient = getClientForCluster(LEADER)
+        createConnectionBetweenClusters(FOLLOWER, LEADER)
+
+        val settings = Settings.builder()
+            .put(MapperService.INDEX_MAPPING_TOTAL_FIELDS_LIMIT_SETTING.key, Long.MAX_VALUE)
+            .build()
+        val createIndexResponse = leaderClient.indices().create(
+            CreateIndexRequest(leaderIndexName).settings(settings),
+            RequestOptions.DEFAULT
+        )
+        assertThat(createIndexResponse.isAcknowledged).isTrue()
+        leaderClient.index(
+            IndexRequest(leaderIndexName).id("bootstrap-marker").source("value", 1),
+            RequestOptions.DEFAULT
+        )
+        IndexUtil.fillIndex(leaderClient, leaderIndexName, 5000, 1000, 1000)
+
+        followerClient.startReplication(
+            StartReplicationRequest("source", leaderIndexName, followerIndexName),
+            waitForRestore = false
+        )
+        assertBusy({
+            assertThat(followerClient.indices().exists(GetIndexRequest(followerIndexName), RequestOptions.DEFAULT)).isTrue()
+        }, 30, TimeUnit.SECONDS)
+
+        leaderClient.lowLevelClient.performRequest(Request("POST", "/$leaderIndexName/_close"))
+        TimeUnit.SECONDS.sleep(1)
+        leaderClient.lowLevelClient.performRequest(Request("POST", "/$leaderIndexName/_open"))
+
+        assertBusy({
+            `validate status syncing response`(followerClient.replicationStatus(followerIndexName))
+            assertThat(
+                followerClient.get(GetRequest(followerIndexName, "bootstrap-marker"), RequestOptions.DEFAULT).isExists
+            ).isTrue()
+        }, 120, TimeUnit.SECONDS)
+    }
+
     fun `test start replication fails when replication has already been started for the same index`() {
         val followerClient = getClientForCluster(FOLLOWER)
         val leaderClient = getClientForCluster(LEADER)
@@ -1480,4 +1519,3 @@ class StartReplicationIT: MultiClusterRestTestCase() {
         }
     }
 }
-
